@@ -31,33 +31,29 @@ This will prove valuable for cases in which the transient behavior of the thrust
 
 ## Strong emphasis on verification and testing
 Types of test
-- Unit tests
-    These are tests of individual functions or "units" in the code.
+- **Unit tests**: These are tests of individual functions or "units" in the code.
     They are the easiest kind of test to write, and are essential for making sure the nuts and bolts of the code work as anticipated.
     As they grow to test larger chunks of the code, however, they can become brittle and flaky as more and more test setup is needed to "mock" parts of the code not directly under testing.
-- Property tests
-    These check to make sure specific properties hold.
+- **Property tests**: These check to make sure specific properties hold.
     When done well, these can automatically search an input space to try and find cases that violate the properties we have set.
     Whenenver possible, we should try and identify properties that either 1) always hold or 2) hold under some known set of conditions and test for these automatically.
     Some easy ones include mass conservation and one of momentum/energy conservation, depending on the PIC scheme we pic.
     Should also check current conservation.
     Smaller invariants are also worth checking, like verifying that the output of some function is always of a specific form or in a specific range
-- Order verification tests
-    These use artificial source terms and the method of manufactured solutions to check that a given discretized PDE is being solved to the desired order of accuracy.
+- **Order verification tests**: These use artificial source terms and the method of manufactured solutions to check that a given discretized PDE is being solved to the desired order of accuracy.
     We use these in HallThruster.jl for the ion fluid model and the electron energy equation, but we could also do this for other parts of the code, like gradient computations.
     We should try to implement these in a way that requires as little mocking as possible, as the setup code for these tests needs to maintain and can become burdensome.
-- Regression tests
-    These check that the observable behavior of the code has not changed unexpectedly.
+- **Regression tests**: These check that the observable behavior of the code has not changed unexpectedly.
     There are three main types of regression test, each with their own challenges and uses.
-    1. Behavior regression
+    1. *Behavior regression*
         This checks that the code has not changed its overall behavior.
         For us, this means the predicted thruster performance and plasma properties.
         These tests are easy to implement, but rely on you knowing exactly what observable behavior you care about, and what exactly constitutes a change.
-    2. Performance regression
+    2. *Performance regression*
         This type of test checks that we haven't made the code slower.
         This is quite challenging, as the performance of the code varies from machine to machine so we cannot easily specify a standard of performance that we can check against.
         I have not yet figured out a good way to do these sorts of tests.
-    3. Bug regression
+    3. *Bug regression*
         This sort of test verifies that a bug stays fixed.
         When we fix a bug, a test that would have triggered the bug should be added to the code, so that we can check for all time afterward that the bug stays squashed
 

@@ -45,16 +45,13 @@ Types of test
     We should try to implement these in a way that requires as little mocking as possible, as the setup code for these tests needs to maintain and can become burdensome.
 - **Regression tests**: These check that the observable behavior of the code has not changed unexpectedly.
     There are three main types of regression test, each with their own challenges and uses.
-    1. *Behavior regression*
-        This checks that the code has not changed its overall behavior.
+    1. *Behavior regression*: This checks that the code has not changed its overall behavior.
         For us, this means the predicted thruster performance and plasma properties.
         These tests are easy to implement, but rely on you knowing exactly what observable behavior you care about, and what exactly constitutes a change.
-    2. *Performance regression*
-        This type of test checks that we haven't made the code slower.
+    2. *Performance regression*: This type of test checks that we haven't made the code slower.
         This is quite challenging, as the performance of the code varies from machine to machine so we cannot easily specify a standard of performance that we can check against.
         I have not yet figured out a good way to do these sorts of tests.
-    3. *Bug regression*
-        This sort of test verifies that a bug stays fixed.
+    3. *Bug regression*: This sort of test verifies that a bug stays fixed.
         When we fix a bug, a test that would have triggered the bug should be added to the code, so that we can check for all time afterward that the bug stays squashed
 
 ### Axisymmetry and quasi-1D flow

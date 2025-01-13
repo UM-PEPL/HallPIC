@@ -1,15 +1,10 @@
 name: CI
-on:
-  workflow_dispatch:
-  pull_request:
-    branches:
-      - main
-      - v1.0
-  push:
-    branches:
-      - main
-      - v1.0
-    tags: '*'
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  actions: write
+  contents: read
+
 jobs:
   test:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - ${{ github.event_name }}
@@ -30,7 +25,7 @@ jobs:
         with:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
-      - uses: actions/cache@v2
+      - uses: julia-actions/cache@v2
         env:
           cache-name: cache-artifacts
         with:

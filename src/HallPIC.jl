@@ -12,13 +12,6 @@ const E_0 = phi_0 / x_0
 const u_0 = sqrt(q_e * phi_0 / m_0)
 const t_0 = x_0 / u_0
 
-struct Particle{T<:AbstractFloat}
-	weight::T
-	pos::T
-	vel::T
-	acc::T
-end
-
 struct ParticleContainer{T<:AbstractFloat, I<:Integer}
     """
     T: Float32 or Float64

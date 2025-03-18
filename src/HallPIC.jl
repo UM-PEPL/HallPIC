@@ -12,6 +12,7 @@ struct ParticleContainer{T<:AbstractFloat, I<:Integer}
     reactions::Vector{I}
     mass::T
     charge::UInt8
+    N::UInt32
 end
 
 function ParticleContainer(::Type{T}, N, mass, charge) where T
@@ -20,6 +21,7 @@ function ParticleContainer(::Type{T}, N, mass, charge) where T
 	vel = zeros(T, N)
 	acc = zeros(T, N)
 	rxn = UInt8[]
+    N = 0
 	return ParticleContainer{T, eltype(rxn)}(
 		weight, pos, vel, acc, rxn, T(mass), eltype(rxn)(charge)
 	)

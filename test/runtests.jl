@@ -22,10 +22,12 @@ using CairoMakie: Makie as mk
 
 	pc.pos[1] = 0.0
 	pc.vel[1] = 0.0
+	pc.N += 1
 
 	# No acceleration at x = 0
 	test_gather(pc)
 	@test pc.acc[1] == 0
+	@test pc.N == 1 
 
 	hp.push_vel(pc, -dt/2)
 

@@ -1,9 +1,8 @@
 using HallPIC: HallPIC as hp
 using Documenter
 using Test
-using CairoMakie: Makie as mk
 
-#Documenter.doctest(hp)
+Documenter.doctest(hp)
 
 @testset "Harmonic oscillator" begin
 

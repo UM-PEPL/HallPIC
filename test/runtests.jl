@@ -5,7 +5,7 @@ using Test
 Documenter.doctest(hp)
 
 function test_leapfrog(::Type{T}) where T
-	function leapfrog_gather(pc::hp.ParticleContainer)
+	function leapfrog_gather!(pc::hp.ParticleContainer)
 		@inbounds for i in eachindex(pc.pos)
 			pc.acc[i] = -pc.pos[i]
 		end

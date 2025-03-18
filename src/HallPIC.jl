@@ -44,8 +44,62 @@ function ParticleContainer(::Type{T}, N, mass, charge) where T
 	)
 end
 
+function add_particle(pc::ParticleContainer, x, v, a, w)
+    """
+    Add a particle to a container 
 
-function Initialize_Particles(::Type{T}, N_cell, x, dx, N_per, density, velocity, temperature, mass, Charge_Index) where T
+    Inputs: 
+    pc (Particle Container Object)
+        the particles object to add the particle too
+    x (float)
+        the position of the particle 
+    v (float)
+        the velocity of the particle 
+    a (float)
+        the acceleration of the particle  
+    w (float)
+        the weight of the particle
+    Outputs:
+    pc (Particle Container Object)
+        modified particles object 
+    """
+
+    #add to the particle 
+    append!(pc.pos, x)
+    append!(pc.vel, v)
+    append!(pc.acc, a)
+    append!(pc.weight, w)
+
+
+    return pc 
+end
+
+struct SpeciesGridProperties{T<:AbstractFloat, I<:Integer}
+    """
+    T: Float32 or Float64
+    I: UInt 
+    """
+    n::Matrix{T}
+    v::Matrix{T}
+    Temp::Matrix{T}
+    w_bar::Matrix{T}
+    w_tot::Matrix{T}
+    N::Matrix{I}
+end
+
+function SpeciesGridProperties(::Type{T}, N_cell, N_species) where T
+	n = zeros(T, N_cell, N_species)
+	v = zeros(T, N_cell, N_species)
+	Temp = zeros(T, N_cell, N_species)
+	w_bar = zeros(T, N_cell, N_species)
+	w_tot = zeros(T, N_cell, N_species)
+    N = zeros(Int32, N_cell, N_species)
+	return SpeciesGridProperties{T, Int32}(
+		n, v, Temp, w_bar, w_tot, N)
+end
+
+
+function initialize_particles(::Type{T}, n_cell, x, dx, n_ppc, density, velocity, temperature, mass, charge) where T
     """
     Initialize a set of particles using a grid and properties 
     Inputs: 
@@ -75,25 +129,25 @@ function Initialize_Particles(::Type{T}, N_cell, x, dx, N_per, density, velocity
     """
 
     #initialize particle object 
-    Particles = ParticleContainer(T, 0, mass, Charge_Index)
+    particles = ParticleContainer(T, 0, mass, charge)
     #create storage arrays 
-    N_p = N_per*N_cell
+    n_p = n_ppc*n_cell
     cell_idx = 1
-    for i = 1:N_p
+    for i = 1:n_p
         #sample uniformly in the cell 
-        append!(Particles.pos, rand()*dx[cell_idx] + x[cell_idx])
+        append!(particles.pos, rand()*dx[cell_idx] + x[cell_idx])
         #sample from Maxwellian and transform
-        append!(Particles.vel, randn() * temperature[cell_idx] + velocity[cell_idx])
+        append!(particles.vel, randn() * temperature[cell_idx] + velocity[cell_idx])
         #evenly distribute the weights
-        append!(Particles.weight, density[cell_idx] .* dx[cell_idx] ./ N_per)
+        append!(particles.weight, density[cell_idx] .* dx[cell_idx] ./ n_ppc)
         #update the current cell 
-        cell_idx = Int(floor(i/N_per) + 1)
+        cell_idx = Int(floor(i/n_ppc) + 1)
     end
 
     #set average weight
-    w_bar = density / N_per 
+    w_bar = density / n_ppc 
 
-    return Particles, w_bar 
+    return particles, w_bar 
 end
 
 
@@ -127,7 +181,7 @@ end
 
 function Deposit(N_cell, x, dx, w_bar, Particles::ParticleContainer)
     """
-    Initialize a set of particles using a grid and properties 
+    Deposit bulk particle quantities to the grid 
     Inputs: 
         N_cell (int)
             number of cells on the grid

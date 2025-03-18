@@ -120,6 +120,40 @@ end
 	end
 end
 
+function test_initialization(::Type{T}) where T 
+	#try initalizing the particles object 
+
+	particles = hp.ParticleContainer(T, 0, 131.29*1.66e-27, 1)
+
+	#check the initialization 
+	@test particles.charge == 1
+	@test particles.mass ≈ 131.29*1.66e-27
+	@test isempty(particles.pos)
+	@test isempty(particles.vel)
+	@test isempty(particles.acc)
+	@test isempty(particles.weight)
+
+	#try adding two particles 
+	particles = hp.add_particle(particles, 1.57, 19823.1041, 0.0, 1.589e16)
+	particles = hp.add_particle(particles, 0.51, 981.471, 5.402e9, 1.589e16)
+
+	#check them 
+	@test particles.pos[1] ≈ 1.57
+	@test particles.pos[2] ≈ 0.51 
+	@test particles.vel[1] ≈ 19823.1041
+	@test particles.vel[2] ≈ 981.471
+	@test particles.acc[1] ≈ 0.0
+	@test particles.acc[2] ≈ 5.402e9
+	@test particles.weight[1] ≈ 1.589e16
+	@test particles.weight[2] ≈ 1.589e16
+end
+
+@testset "Initialization" begin
+	for T in [Float32, Float64]
+		test_initialization(T)
+	end
+end
+
 function test_Initial_Deposition(::Type{T}) where T
 	#define the cell properties
 	N_cell = 4
@@ -134,7 +168,7 @@ function test_Initial_Deposition(::Type{T}) where T
 	x_c = (x[2:end] + x[1:end-1]) / 2
 	dx = x[2:end] - x[1:end-1]
 
-	Neutrals, w_bar_n = hp.Initialize_Particles(T, N_cell, x, dx, N_n, nn, vn, Tn, 131.29*1.66e-27, 0)
+	Neutrals, w_bar_n = hp.initialize_particles(T, N_cell, x, dx, N_n, nn, vn, Tn, 131.29*1.66e-27, 0)
 
 	#check that particles are in bounds and limits are correct
 	@test size(Neutrals.pos)[1] == N_cell * N_n
@@ -151,8 +185,7 @@ function test_Initial_Deposition(::Type{T}) where T
 	@test max <= 300 + 10 * thermal_speed
 	@test min >= 300 - 10 * thermal_speed
 
-	@test Neutrals.charge == 0
-	@test Neutrals.mass ≈ 131.29*1.66e-27
+	
 
 	nn, vn, Tn, w_bar_n, N_n_cell = hp.Deposit(N_cell, x_c, dx, w_bar_n, Neutrals)
 

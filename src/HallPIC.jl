@@ -28,15 +28,13 @@ end
 
 function push_pos(pc::ParticleContainer, dt::AbstractFloat)
     @inbounds for i in eachindex(pc.pos)
-        #pc.pos[i] = muladd(pc.vel[i], dt, pc.pos[i])
-		pc.pos[i] += pc.vel[i] * dt
+        pc.pos[i] = muladd(pc.vel[i], dt, pc.pos[i])
     end
 end
 
 function push_vel(pc::ParticleContainer, dt::AbstractFloat)
     @inbounds for i in eachindex(pc.vel)
-		pc.vel[i] += pc.acc[i] * dt
-        #pc.vel[i] = muladd(pc.acc[i], dt, pc.vel[i])
+        pc.vel[i] = muladd(pc.acc[i], dt, pc.vel[i])
     end
 end
 

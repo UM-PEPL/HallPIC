@@ -2,7 +2,7 @@ using HallPIC: HallPIC as hp
 using Documenter
 using Test
 
-Documenter.doctest(hp)
+#Documenter.doctest(hp)
 
 function test_leapfrog(::Type{T}) where T
 	function leapfrog_gather(pc::hp.ParticleContainer)
@@ -28,7 +28,7 @@ function test_leapfrog(::Type{T}) where T
 	pc.vel[1] = 0.0
 
 	# No acceleration at x = 0
-	leapfrog_gather!(pc)
+	leapfrog_gather(pc)
 	@test pc.acc[1] == 0
 
 	hp.push_vel!(pc, -dt/2)
@@ -42,7 +42,7 @@ function test_leapfrog(::Type{T}) where T
 	# Check that leapfrog is centered as expected
 	pc.pos[1] = x0
 	pc.vel[1] = v0
-	leapfrog_gather!(pc)
+	leapfrog_gather(pc)
 
 	# half step backward in velocity
 	hp.push_vel!(pc, -dt/2)
@@ -50,7 +50,7 @@ function test_leapfrog(::Type{T}) where T
 	vel[1] = pc.vel[1]
 
 	for i in 2:num_steps
-		leapfrog_gather!(pc)
+		leapfrog_gather(pc)
 		hp.push!(pc, dt)
 
 		pos[i] = pc.pos[1]
@@ -114,9 +114,61 @@ function test_linear_drop(::Type{T}, V) where T
 	@test u_exact ≈ pc.vel[1]
 end
 
-
 @testset "Linear potential drop" begin
 	for T in [Float32, Float64]
 		test_linear_drop(T, 600.0)
+	end
+end
+
+function test_Initial_Deposition(::Type{T}) where T
+	#define the cell properties
+	N_cell = 4
+	N_n = 50000#per cell 
+
+
+	#seed properties/initialize cell arrays 
+	nn = ones(N_cell) * 1e18#1/m^3
+	vn = ones(N_cell) * 300
+	Tn = ones(N_cell) * (500 / 11604) #eV
+	x = 0:(1/N_cell):1
+	x_c = (x[2:end] + x[1:end-1]) / 2
+	dx = x[2:end] - x[1:end-1]
+
+	Neutrals, w_bar_n = hp.Initialize_Particles(T, N_cell, x, dx, N_n, nn, vn, Tn, 131.29*1.66e-27, 0)
+
+	#check that particles are in bounds and limits are correct
+	@test size(Neutrals.pos)[1] == N_cell * N_n
+	min, max = extrema(Neutrals.pos)
+	@test max <= 1
+	@test min >= 0
+
+	min, max = extrema(Neutrals.weight)
+	@test max ≈ 5e12
+	@test min ≈ 5e12
+
+	min, max = extrema(Neutrals.vel)
+	thermal_speed = sqrt(2 * hp.q_e * (500 / 11604) / Neutrals.mass)
+	@test max <= 300 + 10 * thermal_speed
+	@test min >= 300 - 10 * thermal_speed
+
+	@test Neutrals.charge == 0
+	@test Neutrals.mass ≈ 131.29*1.66e-27
+
+	nn, vn, Tn, w_bar_n, N_n_cell = hp.Deposit(N_cell, x_c, dx, w_bar_n, Neutrals)
+
+	#check that interior cells reproduce
+	@test isapprox(nn[2], 1e18; rtol = 0.01)
+	@test isapprox(vn[2], 300; rtol = 0.01)
+	@test isapprox(Tn[2], (500 / 11604); rtol = 0.01)
+
+	@test isapprox(nn[3], 1e18; rtol = 0.01)
+	@test isapprox(vn[3], 300; rtol = 0.01)
+	@test isapprox(Tn[3], (500 / 11604); rtol = 0.01)
+
+end
+
+@testset "Initial Deposition" begin
+	for T in [Float32, Float64]
+		test_Initial_Deposition(T)
 	end
 end

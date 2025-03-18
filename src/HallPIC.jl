@@ -6,6 +6,7 @@ struct ParticleContainer{T<:AbstractFloat, I<:Integer}
     I: UInt8 (if less than 256 rxns) or UInt16
     """
     weight::Vector{T}
+    w_bar::Vector{T}
     pos::Vector{T}
     vel::Vector{T}
     acc::Vector{T}
@@ -17,6 +18,7 @@ end
 
 function ParticleContainer(::Type{T}, N, mass, charge) where T
 	weight = zeros(T, N)
+    w_bar = zeros(T, N)
 	pos = zeros(T, N)
 	vel = zeros(T, N)
 	acc = zeros(T, N)

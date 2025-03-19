@@ -193,7 +193,7 @@ function Base.getindex(sp::SpeciesProperties{T}, i) where T
 	)
 end
 
-Base.isdone(sp::SpeciesProperties) = i > length(sp)
+Base.isdone(sp::SpeciesProperties, i) = i > length(sp)
 Base.eltype(::SpeciesProperties{T}) where T = CellProperties{T}
 
 Base.iterate(sp::SpeciesProperties) = length(sp) > 0 ? (sp[1], 2) : nothing 
@@ -214,15 +214,15 @@ from a provided SpeciesProperties object.
 Accounting note: the edges of cell i are edges[i] and edges[i+1]
 """
 function initialize_particles(sp::SpeciesProperties{T}, edges, volumes, particles_per_cell) where T
-	pos_buf = zeros(T, N_ppc)
-	vel_buf = zeros(T, N_ppc)
-	weight_buf = zeros(T, N_ppc)
+	pos_buf = zeros(T, particles_per_cell)
+	vel_buf = zeros(T, particles_per_cell)
+	weight_buf = zeros(T, particles_per_cell)
 
-	num_cells = length(cell_centers)
+	num_cells = length(edges) - 1
 
 	@assert num_cells == length(sp)
 
-	pc = ParticleContainer{T}(0, species)
+	pc = ParticleContainer{T}(0, sp.species)
 
 	for (i, (V, cell)) in enumerate(zip(volumes, sp))
 		z_L = edges[i]
@@ -233,7 +233,7 @@ function initialize_particles(sp::SpeciesProperties{T}, edges, volumes, particle
 		@. pos_buf = dz * pos_buf + z_L 
 
 		Random.randn!(vel_buf)
-		v_th = sqrt(cell.temp / pc.gas.m)
+		v_th = sqrt(cell.temp / pc.species.gas.mass)
 		@. vel_buf + vel_buf * v_th + cell.vel
 
 		weight = cell.dens * V / particles_per_cell

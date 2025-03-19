@@ -203,59 +203,59 @@ end
 end
 
 
-function test_Initial_Deposition(::Type{T}) where T
+function test_initial_deposition(::Type{T}) where T
 	#initialize species 
-	Xenon = hp.Gas(name=:Xe, mass=131.293)
+	xenon = hp.Gas(name=:Xe, mass=131.293)
 
 	#define the cell properties
-	N_cell = 4
-	N_n = 50000#per cell 
+	n_cell = 4
+	n_n = 50000#per cell 
 
 
 	#seed properties/initialize cell arrays 
-	Neutral_Properties = hp.SpeciesProperties{Float64}(N_cell, Xenon(0))
-	base = ones(N_cell)
-	Neutral_Properties.dens .= base .* 1e18#1/m^3
-	Neutral_Properties.vel .= base .* 300
-	Neutral_Properties.temp .= base .* (500 / 11604) #eV
-	x = 0:(1/N_cell):1
+	neutral_properties = hp.SpeciesProperties{Float64}(n_cell, xenon(0))
+	base = ones(n_cell)
+	neutral_properties.dens .= base .* 1e18#1/m^3
+	neutral_properties.vel .= base .* 300
+	neutral_properties.temp .= base .* (500 / 11604) #eV
+	x = 0:(1/n_cell):1
 	x_c = (x[2:end] + x[1:end-1]) / 2
 	dx = x[2:end] - x[1:end-1]
 
-	Neutrals = hp.initialize_particles(Neutral_Properties, x, dx, N_n)
+	neutrals = hp.initialize_particles(neutral_properties, x, dx, n_n)
 
 	#check that particles are in bounds and limits are correct
-	@test size(Neutrals.pos)[1] == N_cell * N_n
-	min, max = extrema(Neutrals.pos)
+	@test size(neutrals.pos)[1] == n_cell * n_n
+	min, max = extrema(neutrals.pos)
 	@test max <= 1
 	@test min >= 0
 
-	min, max = extrema(Neutrals.weight)
+	min, max = extrema(neutrals.weight)
 	@test max ≈ 5e12
 	@test min ≈ 5e12
 
-	min, max = extrema(Neutrals.vel)
-	thermal_speed = sqrt(2 * hp.q_e * (500 / 11604) / (Neutrals.species.gas.mass * hp.m_0))
+	min, max = extrema(neutrals.vel)
+	thermal_speed = sqrt(2 * hp.q_e * (500 / 11604) / (neutrals.species.gas.mass * hp.m_0))
 	@test max <= 300 + 10 * thermal_speed
 	@test min >= 300 - 10 * thermal_speed
 
 	
 	#deposit to the cells 
-	New_Neutral_Properties = hp.deposit(x_c, dx, Neutral_Properties, Neutrals)
+	new_neutral_properties = hp.deposit(x_c, dx, neutral_properties, neutrals)
 
 	#check that interior cells reproduce
-	@test isapprox(New_Neutral_Properties.dens[2], Neutral_Properties.dens[2]; rtol = 0.01)
-	@test isapprox(New_Neutral_Properties.vel[2], Neutral_Properties.vel[2]; rtol = 0.01)
-	@test isapprox(New_Neutral_Properties.temp[2], Neutral_Properties.temp[2]; rtol = 0.01)
+	@test isapprox(new_neutral_properties.dens[2], neutral_properties.dens[2]; rtol = 0.01)
+	@test isapprox(new_neutral_properties.vel[2], neutral_properties.vel[2]; rtol = 0.01)
+	@test isapprox(new_neutral_properties.temp[2], neutral_properties.temp[2]; rtol = 0.01)
 
-	@test isapprox(New_Neutral_Properties.dens[3], Neutral_Properties.dens[3]; rtol = 0.01)
-	@test isapprox(New_Neutral_Properties.vel[3], Neutral_Properties.vel[3]; rtol = 0.01)
-	@test isapprox(New_Neutral_Properties.temp[3], Neutral_Properties.temp[3]; rtol = 0.01)
+	@test isapprox(new_neutral_properties.dens[3], neutral_properties.dens[3]; rtol = 0.01)
+	@test isapprox(new_neutral_properties.vel[3], neutral_properties.vel[3]; rtol = 0.01)
+	@test isapprox(new_neutral_properties.temp[3], neutral_properties.temp[3]; rtol = 0.01)
 
 end
 
 @testset "Initial Deposition" begin
 	for T in [Float32, Float64]
-		test_Initial_Deposition(T)
+		test_initial_deposition(T)
 	end
 end

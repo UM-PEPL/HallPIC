@@ -246,13 +246,13 @@ function initialize_particles(sp::SpeciesProperties{T}, edges, volumes, particle
 end
 
 
-function deposit(cell_centers, volumes, Fluid_Properties::SpeciesProperties{T}, Particles::ParticleContainer) where T
+function deposit(cell_centers, volumes, fluid_properties::SpeciesProperties{T}, particles::ParticleContainer) where T
     """
     Initialize a set of particles using a grid and properties 
     Inputs: 
         cell_centers (N_cell+1 array of floats)
             positions of cell centers 
-        volumnes (N_cell array of floats)
+        volumes (N_cell array of floats)
             cell widths/volume
         Fluid_Properties (Species properties object)
             object containing fluid properties for the species on the grid, to be updated
@@ -264,50 +264,50 @@ function deposit(cell_centers, volumes, Fluid_Properties::SpeciesProperties{T}, 
     """
 
     #initialize sums 
-    N_cell = length(cell_centers)
-    w_sum = zeros(T, N_cell)
-    v_sum = zeros(T, N_cell)
-    T_sum = zeros(T, N_cell)    
-    N = zeros(T, N_cell)
+    n_cell = length(cell_centers)
+    w_sum = zeros(T, n_cell)
+    v_sum = zeros(T, n_cell)
+    temp_sum = zeros(T, n_cell)    
+    n = zeros(T, n_cell)
 
     #pull quantities
-    N_p = size(Particles.pos)[1]
+    n_p = size(particles.pos)[1]
     #loop over particles
     #technically there's a loop over cells in here too, but that tis handled with logical indexing
-    for i=1:N_p
+    for i=1:n_p
         #calculate relative position 
-        x_rel = abs.(cell_centers .- Particles.pos[i]) ./ volumes
+        x_rel = abs.(cell_centers .- particles.pos[i]) ./ volumes
     
         #contribute to cells that particles touch 
-        w_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) * Particles.weight[i]
-        v_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) * Particles.weight[i] * Particles.vel[i]
+        w_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) * particles.weight[i]
+        v_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) * particles.weight[i] * particles.vel[i]
         
         #count number of particles in the cell 
-        N[x_rel .< 1] .+= 1 
+        n[x_rel .< 1] .+= 1 
     end
 
 
     #normalization
     #assign the properties 
-    Fluid_Properties.dens .= w_sum ./ volumes 
-    Fluid_Properties.vel .= v_sum ./ (volumes .* Fluid_Properties.dens)
+    fluid_properties.dens .= w_sum ./ volumes 
+    fluid_properties.vel .= v_sum ./ (volumes .* fluid_properties.dens)
 
     #do the temperature calculation 
-    for i=1:N_p 
+    for i=1:n_p 
         #calculate relative position 
-        x_rel = abs.(cell_centers .- Particles.pos[i]) ./ volumes
+        x_rel = abs.(cell_centers .- particles.pos[i]) ./ volumes
         #particle contribution to temperature 
-        T_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) .* Particles.weight[i] .* (Particles.vel[i] .-Fluid_Properties.vel[x_rel .< 1]).^2
+        temp_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) .* particles.weight[i] .* (particles.vel[i] .-fluid_properties.vel[x_rel .< 1]).^2
     end
     #normalize
-    Fluid_Properties.temp .= sqrt.(1 * T_sum ./ ((N.-1)./N.* Fluid_Properties.dens .*volumes))
+    fluid_properties.temp .= sqrt.(1 * temp_sum ./ ((n.-1)./n.* fluid_properties.dens .*volumes))
     #calculation for average weight
     #hold time average interval to 50 for now (see Dominguez Vazquez thesis) can have as an input parameter later 
-    N_k = 50 
-    Fluid_Properties.avg_weight .= (Fluid_Properties.avg_weight * (N_k - 1 ) + (w_sum ./ N)) / N_k  
+    n_k = 50 
+    fluid_properties.avg_weight .= (fluid_properties.avg_weight * (n_k - 1 ) + (w_sum ./ n)) / n_k  
 
     
-    return Fluid_Properties
+    return fluid_properties
 end
 
 

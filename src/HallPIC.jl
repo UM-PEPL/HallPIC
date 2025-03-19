@@ -4,16 +4,34 @@ using DataInterpolations: DataInterpolations, LinearInterpolation
 using DocStringExtensions
 using Random: Random
 
+
+#===================================================
+Nondimensionalization notes
+
+# Base quantities
+m_0 = 1 amu 		[mass]
+q_0 = q_e 			[charge]
+n_0 = 1e14			[volume -> length]
+phi_0 = q T_0 = q E_0 = 1 V or 1 eV  [energy -> time]
+
+x_0 = 1 / (n_0^1/3)
+u_0 = sqrt(q_e * phi_0 / m_0)
+t_0 = x_0 / u_0
+E_0 = phi_0 / x_0
+===================================================#
+
+# Physical constants and base units
 const q_e = 1.608e-19
 const N_A = 6.022e26
 const m_0 = 1 / N_A
-const q0_m0 = q_e / m_0
-const phi_0 = 300.0
-const x_0 = 0.05
-const E_0 = phi_0 / x_0
+const n_0 = 1e12
+const phi_0 = 1.0
+
+# Derived quantities
+const x_0 = 1 / cbrt(n_0)
 const u_0 = sqrt(q_e * phi_0 / m_0)
 const t_0 = x_0 / u_0
- 
+const E_0 = phi_0 / x_0
 
 #======================================================
 Gas and Species definitions

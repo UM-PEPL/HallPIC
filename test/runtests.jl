@@ -2,7 +2,10 @@ using HallPIC: HallPIC as hp
 using Documenter
 using Test
 
-#Documenter.doctest(hp)
+Documenter.doctest(hp)
+
+const Hydrogen = hp.Gas(name=:H, mass=1)
+const Xenon = hp.Gas(name=:Xe, mass=131.293)
 
 function test_leapfrog(::Type{T}) where T
 	function leapfrog_gather!(pc::hp.ParticleContainer)
@@ -21,7 +24,7 @@ function test_leapfrog(::Type{T}) where T
 	pos = zeros(num_steps)
 	vel = zeros(num_steps)
 
-	pc = hp.ParticleContainer(T, 1, 1, 1)
+	pc = hp.ParticleContainer{T}(1, Hydrogen(1))
 
 	# Test 1: Initially-stationary particle remains at rest
 	pc.pos[1] = 0.0
@@ -74,7 +77,7 @@ end
 end
 
 function test_linear_drop(::Type{T}, V) where T
-	pc = hp.ParticleContainer(T, 1, 1, 1)
+	pc = hp.ParticleContainer{T}(1, Hydrogen(1))
 	M = 100
 	L = 0.05
 	x = LinRange(0, L, M)
@@ -86,8 +89,8 @@ function test_linear_drop(::Type{T}, V) where T
 	extrap = hp.DataInterpolations.ExtrapolationType.Constant
 	E_itp = hp.LinearInterpolation(E_norm, x_norm, extrapolation = extrap)
 
-	q = pc.charge * hp.q_e
-	m = pc.mass * hp.m_0
+	q = hp.charge(pc.species) * hp.q_e
+	m = hp.mass(pc.species) * hp.m_0
 
 	u_expected = sqrt(2 * q * V / m)
 	dt = 0.5 * L / u_expected / M
@@ -106,7 +109,7 @@ function test_linear_drop(::Type{T}, V) where T
 
 	hp.push_vel!(pc, dt_norm/2)
 
-	a = pc.charge * E_norm[1] / pc.mass
+	a = hp.charge(pc.species) * E_norm[1] / hp.mass(pc.species)
 	u_exact = T(a * t)
 	x_exact = T(0.5 * a * t^2)
 
@@ -121,16 +124,13 @@ end
 end
 
 
-function test_initialization(::Type{T}) where T 
-	m_Xe = 131.293
-	m = m_Xe / hp.N_A
-
-	#try initalizing the particles object 
-	particles = hp.ParticleContainer(T, 0, m, 1)
+function test_add_particles(::Type{T}) where T 
+	# try initalizing the particles object 
+	particles = hp.ParticleContainer{T}(0, Xenon(1))
 
 	#check the initialization 
-	@test particles.charge == 1
-	@test particles.mass == T(m)
+	@test hp.charge(particles.species) == 1
+	@test hp.mass(particles.species) == Xenon.mass
 	@test isempty(particles.pos)
 	@test isempty(particles.vel)
 	@test isempty(particles.acc)
@@ -161,9 +161,44 @@ function test_initialization(::Type{T}) where T
 	@test particles.acc[2] == 0
 end
 
-@testset "Initialization" begin
+@testset "Add particles" begin
 	for T in [Float32, Float64]
-		test_initialization(T)
+		test_add_particles(T)
+	end
+end
+
+@testset "SpeciesProperties" begin
+	for T in [Float32, Float64]
+		N = 5
+		sp = hp.SpeciesProperties{T}(N, Hydrogen(1))
+		@test length(sp) == N
+
+		base = collect(1.0:N)
+		@. sp.dens = 1.0 * base
+		@. sp.vel = 2.0 * base
+		@. sp.temp = 3.0 * base
+		@. sp.avg_weight = 4.0*base
+
+		@test eltype(sp) == hp.CellProperties{T}
+
+		for (i, cell) in enumerate(sp)
+			@test cell.dens == sp.dens[i] && cell.dens == sp[i].dens
+			@test cell.vel == sp.vel[i] && cell.vel == sp[i].vel
+			@test cell.temp == sp.temp[i] && cell.temp == sp[i].temp
+			@test cell.avg_weight == sp.avg_weight[i] == sp[i].avg_weight
+			@test cell == sp[i]
+		end
+		c = collect(sp)
+		@test eltype(c) == hp.CellProperties{T}
+		@test length(c) == N
+
+		sp_empty = hp.SpeciesProperties{T}(0, Hydrogen(1))
+		for _ in sp_empty
+		end
+		c = collect(sp_empty)
+		@test eltype(c) == hp.CellProperties{T}
+		@test length(c) == 0
+		@test length(sp_empty) == 0
 	end
 end
 

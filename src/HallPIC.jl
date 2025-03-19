@@ -2,6 +2,7 @@ module HallPIC
 
 using DataInterpolations: DataInterpolations, LinearInterpolation
 using DocStringExtensions
+using Random: Random
 
 const q_e = 1.608e-19
 const N_A = 6.022e26
@@ -12,11 +13,42 @@ const x_0 = 0.05
 const E_0 = phi_0 / x_0
 const u_0 = sqrt(q_e * phi_0 / m_0)
 const t_0 = x_0 / u_0
+ 
 
+#======================================================
+Gas and Species definitions
+======================================================#
+
+@kwdef struct Gas
+	mass::Float64
+	name::Symbol
+end
 
 """
 $(TYPEDEF)
-Contains per-particle information for a single species.
+A single chemical species (charge + mass)
+$(TYPEDFIELDS)
+"""
+@kwdef struct Species
+	gas::Gas
+    reactions::Vector{UInt8}
+	charge::UInt8
+end
+
+@inline (g::Gas)(Z::Integer) = Species(gas=g, charge=UInt8(Z), reactions=UInt8[])
+
+# Helper methods
+@inline mass(s::Species) = s.gas.mass
+@inline charge(s::Species) = s.charge
+@inline charge_to_mass(s::Species) = s.charge / s.gas.mass
+
+#======================================================
+ParticleContainer definitions
+======================================================#
+
+"""
+$(TYPEDEF)
+Per-particle information for a single species.
 `T` is expected to be either Float32 or Float64
 $(TYPEDFIELDS)
 """
@@ -25,22 +57,18 @@ struct ParticleContainer{T<:AbstractFloat}
     pos::Vector{T}
     vel::Vector{T}
     acc::Vector{T}
-    reactions::Vector{UInt8}
-    mass::T
-    charge::UInt8
+	species::Species
 end
 
-function ParticleContainer(::Type{T}, N, mass, charge) where T
+function ParticleContainer{T}(N, species::Species) where T<:AbstractFloat
 	weight = zeros(T, N)
 	pos = zeros(T, N)
 	vel = zeros(T, N)
 	acc = zeros(T, N)
-	rxn = UInt8[]
 	return ParticleContainer{T}(
-		weight, pos, vel, acc, rxn, T(mass), eltype(rxn)(charge)
+		weight, pos, vel, acc, species 
 	)
 end
-
 
 """
 $(TYPEDSIGNATURES)
@@ -87,18 +115,23 @@ function push_vel!(pc::ParticleContainer, dt::AbstractFloat)
 end
 
 
-function gather!(pc::ParticleContainer, E_itp::LinearInterpolation)
-	charge_to_mass = pc.charge / pc.mass
+function gather!(pc::ParticleContainer{T}, E_itp::LinearInterpolation) where T
+	q_m = charge_to_mass(pc.species)
 	@inbounds for i in eachindex(pc.pos)
-		pc.acc[i] = charge_to_mass * E_itp(pc.pos[i])
+		pc.acc[i] = T(q_m * E_itp(pc.pos[i]))
 	end
 	return pc
 end
 
 
+#======================================================
+SpeciesProperties and CellProperties definitions
+======================================================#
+
 """
 $(TYPEDEF)
 T: Float32 or Float64
+Holds fluid properties (density, velocity, temperature) for a single species.
 $(TYPEDFIELDS)
 """
 struct SpeciesProperties{T<:AbstractFloat}
@@ -106,73 +139,95 @@ struct SpeciesProperties{T<:AbstractFloat}
     vel::Vector{T}
     temp::Vector{T}
     avg_weight::Vector{T}
+	species::Species
+end
+
+"""
+$(TYPEDEF)
+Contains fluid information for a single cell.
+$(TYPEDFIELDS)
+"""
+struct CellProperties{T<:AbstractFloat}
+	dens::T
+	vel::T
+	temp::T
+	avg_weight::T
+end
+
+function SpeciesProperties{T}(num_cells, species::Species) where T<:AbstractFloat
+	dens = zeros(T, num_cells)
+	vel = zeros(T, num_cells)
+	temp = zeros(T, num_cells)
+	avg_weight = zeros(T, num_cells)
+	return SpeciesProperties{T}(dens, vel, temp, avg_weight, species)
+end
+
+
+#======================================================
+  Iterator interface definition for SpeciesProperties
+======================================================#
+
+Base.length(sp::SpeciesProperties) = length(sp.dens)
+
+function Base.getindex(sp::SpeciesProperties{T}, i) where T
+	return CellProperties{T}(
+		sp.dens[i], sp.vel[i], sp.temp[i], sp.avg_weight[i]
+	)
+end
+
+Base.isdone(sp::SpeciesProperties) = i > length(sp)
+Base.eltype(::SpeciesProperties{T}) where T = CellProperties{T}
+
+Base.iterate(sp::SpeciesProperties) = length(sp) > 0 ? (sp[1], 2) : nothing 
+function Base.iterate(sp::SpeciesProperties, i)
+	i > length(sp) && return nothing
+	return sp[i], i+1
+end
+
+#======================================================
+Functions using SpeciesProperties
+======================================================#
+
+"""
+$(TYPEDSIGNATURES)
+Create a particle container and fill it with particles matching the macroscopic properties
+from a provided SpeciesProperties object.
+
+Accounting note: the edges of cell i are edges[i] and edges[i+1]
+"""
+function initialize_particles(sp::SpeciesProperties{T}, edges, volumes, particles_per_cell) where T
+	pos_buf = zeros(T, N_ppc)
+	vel_buf = zeros(T, N_ppc)
+	weight_buf = zeros(T, N_ppc)
+
+	num_cells = length(cell_centers)
+
+	@assert num_cells == length(sp)
+
+	pc = ParticleContainer{T}(0, species)
+
+	for (i, (V, cell)) in enumerate(zip(volumes, sp))
+		z_L = edges[i]
+		z_R = edges[i+1]
+		dz = z_R - z_L
+
+		Random.rand!(pos_buf)
+		@. pos_buf = dz * pos_buf + z_L 
+
+		Random.randn!(vel_buf)
+		v_th = sqrt(cell.temp / pc.gas.m)
+		@. vel_buf + vel_buf * v_th + cell.vel
+
+		weight = cell.dens * V / particles_per_cell
+		@. weight_buf = weight
+
+		add_particles!(pc, pos_buf, vel_buf, weight_buf)
+	end
+
+	return pc
 end
 
 #=
-function SpeciesGridProperties(::Type{T}, N_cell, N_species) where T
-	n = zeros(T, N_cell, N_species)
-	v = zeros(T, N_cell, N_species)
-	Temp = zeros(T, N_cell, N_species)
-	w_bar = zeros(T, N_cell, N_species)
-	w_tot = zeros(T, N_cell, N_species)
-    N = zeros(Int32, N_cell, N_species)
-	return SpeciesGridProperties{T, Int32}(
-		n, v, Temp, w_bar, w_tot, N)
-end
-
-
-function initialize_particles(::Type{T}, n_cell, x, dx, n_ppc, density, velocity, temperature, mass, charge) where T
-    """
-    Initialize a set of particles using a grid and properties 
-    Inputs: 
-        N_cell (int)
-            number of cells on the grid
-        x (N_cell+1 array of floats)
-            positions of cell edges 
-        dx (N_cell array of floats)
-            cell widths
-        N_per (int)
-            number of particles per cell 
-        density (N_cell array of floats)
-            initial number density for each cell
-        velocity (N_cell array of floats)
-            initial velocity for each cell
-        temperature (N_cell array of floats)
-            initial temperature for each cell
-        mass (float)
-            mass for an individual particle for the set 
-        Charge_Index(Int)
-            Index to the state of the charge 
-    Outputs:
-        Particles (HallPIC particle Object)
-            object containing particle information
-        w_bar (N_cell array of floats)
-            time-averaged average particle weight
-    """
-
-    #initialize particle object 
-    particles = ParticleContainer(T, 0, mass, charge)
-    #create storage arrays 
-    n_p = n_ppc*n_cell
-    cell_idx = 1
-    for i = 1:n_p
-        #sample uniformly in the cell 
-        append!(particles.pos, rand()*dx[cell_idx] + x[cell_idx])
-        #sample from Maxwellian and transform
-        append!(particles.vel, randn() * temperature[cell_idx] + velocity[cell_idx])
-        #evenly distribute the weights
-        append!(particles.weight, density[cell_idx] .* dx[cell_idx] ./ n_ppc)
-        #update the current cell 
-        cell_idx = Int(floor(i/n_ppc) + 1)
-    end
-
-    #set average weight
-    w_bar = density / n_ppc 
-
-    return particles, w_bar 
-end
-
-
 
 function Deposit(N_cell, x, dx, w_bar, Particles::ParticleContainer)
     """

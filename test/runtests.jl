@@ -256,3 +256,23 @@ end
 	end
 end
 =#
+
+@testset "Grid construction" begin
+	N = 100
+	left_boundary = hp.OpenBoundary()
+	right_boundary = hp.WallBoundary(0.5)
+	area = 1.0
+	x0 = 0
+	x1 = 1
+	grid = hp.Grid(N, x0, x1, area, left_boundary, right_boundary)
+
+	@test length(grid.cells) == N+2
+	@test length(grid.faces) == N+3
+	@test grid.left_boundary == left_boundary
+	@test grid.right_boundary == right_boundary
+	dz = (x1 - x0) / N
+	@test all(cell.width ≈ Float32(dz) for cell in grid.cells)
+	@test all(cell.volume ≈ dz * area for cell in grid.cells)
+	@test all(grid.cells[i].left_face == grid.faces[i] for i in eachindex(grid.cells))
+	@test all(grid.cells[i].right_face == grid.faces[i+1] for i in eachindex(grid.cells))
+end

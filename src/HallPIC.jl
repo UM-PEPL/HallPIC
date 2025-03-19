@@ -245,6 +245,55 @@ function initialize_particles(sp::SpeciesProperties{T}, edges, volumes, particle
 	return pc
 end
 
+struct OpenBoundary end
+
+struct WallBoundary
+    temperature::Float32
+end
+
+const HeavySpeciesBoundary = Union{OpenBoundary, WallBoundary}
+
+struct Face
+    pos::Float32
+    area::Float32
+end
+
+struct Cell
+    left_face::Face
+    right_face::Face
+    center::Float32
+    volume::Float32
+    width::Float32
+end
+
+struct Grid
+    cells::Vector{Cell}
+    faces::Vector{Face}
+    left_boundary::HeavySpeciesBoundary
+    right_boundary::HeavySpeciesBoundary
+end
+
+function Grid(num_cells, left, right, area, left_boundary, right_boundary)
+    dz = (right - left) / num_cells
+
+    faces = [
+        Face(pos, area) for pos in range(left-dz, right+dz, step=dz)
+    ]
+
+    cells = [
+        let
+            center = 0.5 * (left_face.pos + right_face.pos)
+            width = right_face.pos - left_face.pos
+            volume = 0.5 * dz * (left_face.area + right_face.area)
+            Cell(left_face, right_face, center, volume, width)
+        end
+        for (left_face, right_face) in zip(faces[1:end-1], faces[2:end])
+    ]
+
+    return Grid(cells, faces, left_boundary, right_boundary)
+end
+
+
 #=
 
 function Deposit(N_cell, x, dx, w_bar, Particles::ParticleContainer)

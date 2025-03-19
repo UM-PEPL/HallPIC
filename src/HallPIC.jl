@@ -1,6 +1,7 @@
 module HallPIC
 
 using DataInterpolations: DataInterpolations, LinearInterpolation
+using DocStringExtensions
 
 const q_e = 1.608e-19
 const N_A = 6.022e26
@@ -12,16 +13,19 @@ const E_0 = phi_0 / x_0
 const u_0 = sqrt(q_e * phi_0 / m_0)
 const t_0 = x_0 / u_0
 
-struct ParticleContainer{T<:AbstractFloat, I<:Integer}
-    """
-    T: Float32 or Float64
-    I: UInt8 (if less than 256 rxns) or UInt16
-    """
+
+"""
+$(TYPEDEF)
+Contains per-particle information for a single species.
+`T` is expected to be either Float32 or Float64
+$(TYPEDFIELDS)
+"""
+struct ParticleContainer{T<:AbstractFloat}
     weight::Vector{T}
     pos::Vector{T}
     vel::Vector{T}
     acc::Vector{T}
-    reactions::Vector{I}
+    reactions::Vector{UInt8}
     mass::T
     charge::UInt8
 end
@@ -32,54 +36,79 @@ function ParticleContainer(::Type{T}, N, mass, charge) where T
 	vel = zeros(T, N)
 	acc = zeros(T, N)
 	rxn = UInt8[]
-	return ParticleContainer{T, eltype(rxn)}(
+	return ParticleContainer{T}(
 		weight, pos, vel, acc, rxn, T(mass), eltype(rxn)(charge)
 	)
 end
 
-function add_particle(pc::ParticleContainer, x, v, a, w)
-    """
-    Add a particle to a container 
 
-    Inputs: 
-    pc (Particle Container Object)
-        the particles object to add the particle too
-    x (float)
-        the position of the particle 
-    v (float)
-        the velocity of the particle 
-    a (float)
-        the acceleration of the particle  
-    w (float)
-        the weight of the particle
-    Outputs:
-    pc (Particle Container Object)
-        modified particles object 
-    """
-
-    #add to the particle 
-    append!(pc.pos, x)
-    append!(pc.vel, v)
-    append!(pc.acc, a)
-    append!(pc.weight, w)
-
-
-    return pc 
+"""
+$(TYPEDSIGNATURES)
+Push particle container to next timestep using Leapfrog scheme
+"""
+function push!(pc::ParticleContainer, dt::AbstractFloat)
+    push_vel!(pc, dt)
+    push_pos!(pc, dt)
 end
 
-struct SpeciesGridProperties{T<:AbstractFloat, I<:Integer}
-    """
-    T: Float32 or Float64
-    I: UInt 
-    """
-    n::Matrix{T}
-    v::Matrix{T}
-    Temp::Matrix{T}
-    w_bar::Matrix{T}
-    w_tot::Matrix{T}
-    N::Matrix{I}
+"""
+$(TYPEDSIGNATURES)
+Add particles to a `ParticleContainer`.
+"""
+function add_particles!(pc::ParticleContainer{T}, x::Vector{T}, v::Vector{T}, w::Vector{T}) where T
+	# check that new arrays have same length
+	M = length(x)
+	N = length(pc.pos)
+	@assert M == length(v) && M == length(w)
+	# append position, velocity, weight to pc arrays
+	append!(pc.pos, x)
+	append!(pc.vel, v)
+	append!(pc.weight, w)
+	# extend acceleration array to correct size and fill with zeros
+	resize!(pc.acc, N+M)
+	for i in 1:M
+		pc.acc[N+i] = zero(T)
+	end
+	return pc
 end
 
+function push_pos!(pc::ParticleContainer, dt::AbstractFloat)
+    @inbounds for i in eachindex(pc.pos)
+        pc.pos[i] = muladd(pc.vel[i], dt, pc.pos[i])
+    end
+	return pc
+end
+
+function push_vel!(pc::ParticleContainer, dt::AbstractFloat)
+    @inbounds for i in eachindex(pc.vel)
+        pc.vel[i] = muladd(pc.acc[i], dt, pc.vel[i])
+    end
+	return pc
+end
+
+
+function gather!(pc::ParticleContainer, E_itp::LinearInterpolation)
+	charge_to_mass = pc.charge / pc.mass
+	@inbounds for i in eachindex(pc.pos)
+		pc.acc[i] = charge_to_mass * E_itp(pc.pos[i])
+	end
+	return pc
+end
+
+
+"""
+$(TYPEDEF)
+T: Float32 or Float64
+$(TYPEDFIELDS)
+"""
+struct SpeciesProperties{T<:AbstractFloat}
+    dens::Vector{T}
+    vel::Vector{T}
+    temp::Vector{T}
+    avg_weight::Vector{T}
+end
+
+#=
 function SpeciesGridProperties(::Type{T}, N_cell, N_species) where T
 	n = zeros(T, N_cell, N_species)
 	v = zeros(T, N_cell, N_species)
@@ -144,33 +173,6 @@ function initialize_particles(::Type{T}, n_cell, x, dx, n_ppc, density, velocity
 end
 
 
-function push_pos!(pc::ParticleContainer, dt::AbstractFloat)
-    @inbounds for i in eachindex(pc.pos)
-        pc.pos[i] = muladd(pc.vel[i], dt, pc.pos[i])
-    end
-end
-
-function push_vel!(pc::ParticleContainer, dt::AbstractFloat)
-    @inbounds for i in eachindex(pc.vel)
-        pc.vel[i] = muladd(pc.acc[i], dt, pc.vel[i])
-    end
-end
-
-function push!(pc::ParticleContainer, dt::AbstractFloat)
-    """
-    Push particle container to next timestep using Leapfrog scheme
-    """
-    push_vel!(pc, dt)
-    push_pos!(pc, dt)
-end
-
-function gather!(pc::ParticleContainer, E_itp::LinearInterpolation)
-	charge_to_mass = pc.charge / pc.mass
-	@inbounds for i in eachindex(pc.pos)
-		pc.acc[i] = charge_to_mass * E_itp(pc.pos[i])
-	end
-end
-
 
 function Deposit(N_cell, x, dx, w_bar, Particles::ParticleContainer)
     """
@@ -223,7 +225,6 @@ function Deposit(N_cell, x, dx, w_bar, Particles::ParticleContainer)
         N[x_rel .< 1] .+= 1 
     end
 
-
     #normalization
     density = w_sum ./ dx 
     velocity = v_sum ./ (dx .* density)
@@ -243,5 +244,6 @@ function Deposit(N_cell, x, dx, w_bar, Particles::ParticleContainer)
 
     return density, velocity, temperature, w_bar, N 
 end
+=#
 
 end

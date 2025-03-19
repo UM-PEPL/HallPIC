@@ -28,7 +28,7 @@ function test_leapfrog(::Type{T}) where T
 	pc.vel[1] = 0.0
 
 	# No acceleration at x = 0
-	leapfrog_gather(pc)
+	leapfrog_gather!(pc)
 	@test pc.acc[1] == 0
 
 	hp.push_vel!(pc, -dt/2)
@@ -42,7 +42,7 @@ function test_leapfrog(::Type{T}) where T
 	# Check that leapfrog is centered as expected
 	pc.pos[1] = x0
 	pc.vel[1] = v0
-	leapfrog_gather(pc)
+	leapfrog_gather!(pc)
 
 	# half step backward in velocity
 	hp.push_vel!(pc, -dt/2)
@@ -50,7 +50,7 @@ function test_leapfrog(::Type{T}) where T
 	vel[1] = pc.vel[1]
 
 	for i in 2:num_steps
-		leapfrog_gather(pc)
+		leapfrog_gather!(pc)
 		hp.push!(pc, dt)
 
 		pos[i] = pc.pos[1]
@@ -120,32 +120,45 @@ end
 	end
 end
 
-function test_initialization(::Type{T}) where T 
-	#try initalizing the particles object 
 
-	particles = hp.ParticleContainer(T, 0, 131.29*1.66e-27, 1)
+function test_initialization(::Type{T}) where T 
+	m_Xe = 131.293
+	m = m_Xe / hp.N_A
+
+	#try initalizing the particles object 
+	particles = hp.ParticleContainer(T, 0, m, 1)
 
 	#check the initialization 
 	@test particles.charge == 1
-	@test particles.mass ≈ 131.29*1.66e-27
+	@test particles.mass == T(m)
 	@test isempty(particles.pos)
 	@test isempty(particles.vel)
 	@test isempty(particles.acc)
 	@test isempty(particles.weight)
 
-	#try adding two particles 
-	particles = hp.add_particle(particles, 1.57, 19823.1041, 0.0, 1.589e16)
-	particles = hp.add_particle(particles, 0.51, 981.471, 5.402e9, 1.589e16)
+	# try adding two particles 
+	pos = [T(1.57), T(0.51)]
+	vel = [T(19823.1041), T(981.471)]
+	weight = [T(1.589e16), T(1.589e16)]
+
+	particles = hp.add_particles!(particles, pos, vel, weight)
 
 	#check them 
-	@test particles.pos[1] ≈ 1.57
-	@test particles.pos[2] ≈ 0.51 
-	@test particles.vel[1] ≈ 19823.1041
-	@test particles.vel[2] ≈ 981.471
-	@test particles.acc[1] ≈ 0.0
-	@test particles.acc[2] ≈ 5.402e9
-	@test particles.weight[1] ≈ 1.589e16
-	@test particles.weight[2] ≈ 1.589e16
+	@test length(particles.pos) == 2
+	@test particles.pos[1] == pos[1]
+	@test particles.pos[2] == pos[2]
+
+	@test length(particles.vel) == 2
+	@test particles.vel[1] == vel[1]
+	@test particles.vel[2] == vel[2]
+
+	@test length(particles.weight) == 2
+	@test particles.weight[1] == weight[1]
+	@test particles.weight[2] == weight[2]
+
+	@test length(particles.acc) == 2
+	@test particles.acc[1] == 0
+	@test particles.acc[2] == 0
 end
 
 @testset "Initialization" begin
@@ -153,6 +166,8 @@ end
 		test_initialization(T)
 	end
 end
+
+#=
 
 function test_Initial_Deposition(::Type{T}) where T
 	#define the cell properties
@@ -205,3 +220,4 @@ end
 		test_Initial_Deposition(T)
 	end
 end
+=#

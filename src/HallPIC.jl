@@ -234,7 +234,7 @@ function initialize_particles(sp::SpeciesProperties{T}, edges, volumes, particle
 
 		Random.randn!(vel_buf)
 		v_th = sqrt(cell.temp / pc.species.gas.mass)
-		@. vel_buf + vel_buf * v_th + cell.vel
+		@. vel_buf = vel_buf * v_th + cell.vel
 
 		weight = cell.dens * V / particles_per_cell
 		@. weight_buf = weight
@@ -245,78 +245,70 @@ function initialize_particles(sp::SpeciesProperties{T}, edges, volumes, particle
 	return pc
 end
 
-#=
 
-function Deposit(N_cell, x, dx, w_bar, Particles::ParticleContainer)
+function deposit(cell_centers, volumes, fluid_properties::SpeciesProperties{T}, particles::ParticleContainer) where T
     """
-    Deposit bulk particle quantities to the grid 
+    Initialize a set of particles using a grid and properties 
     Inputs: 
-        N_cell (int)
-            number of cells on the grid
-        x (N_cell+1 array of floats)
+        cell_centers (N_cell+1 array of floats)
             positions of cell centers 
-        dx (N_cell array of floats)
-            cell widths
-        w_bar (N_cell array of floats)
-            time-averaged average particle weight
+        volumes (N_cell array of floats)
+            cell widths/volume
+        Fluid_Properties (Species properties object)
+            object containing fluid properties for the species on the grid, to be updated
         Particles (Particle Object)
             object containing particle information 
     Outputs:
-        density (N_cell array of floats)
-            number density for each cell
-        velocity (N_cell array of floats)
-            velocity for each cell
-        temperature (N_cell array of floats)
-            temperature for each cell
-        w_bar (N_cell array of floats)
-            time-averaged average particle weight
-        N (N_cell array of floats)
-            number of particles in each cell 
+        Fluid_Properties (Species properties object)
+            updated fluid properties for the species on the grid
     """
 
-    #initialize output
-    w_sum = zeros(N_cell)
-    v_sum = zeros(N_cell)
-    T_sum = zeros(N_cell)    
-    N = zeros(N_cell)
+    #initialize sums 
+    n_cell = length(cell_centers)
+    w_sum = zeros(T, n_cell)
+    v_sum = zeros(T, n_cell)
+    temp_sum = zeros(T, n_cell)    
+    n = zeros(T, n_cell)
 
     #pull quantities
-    w_p = Particles.weight
-    v_p = Particles.vel
-    x_p = Particles.pos
-
+    n_p = size(particles.pos)[1]
     #loop over particles
-    @inbounds for i in eachindex(Particles.pos)
+    #technically there's a loop over cells in here too, but that tis handled with logical indexing
+    for i=1:n_p
         #calculate relative position 
-        x_rel = abs.(x .- x_p[i]) ./ dx
+        x_rel = abs.(cell_centers .- particles.pos[i]) ./ volumes
     
         #contribute to cells that particles touch 
-        w_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) * w_p[i]
-        v_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) * w_p[i] * v_p[i]
+        w_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) * particles.weight[i]
+        v_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) * particles.weight[i] * particles.vel[i]
         
         #count number of particles in the cell 
-        N[x_rel .< 1] .+= 1 
+        n[x_rel .< 1] .+= 1 
     end
+
 
     #normalization
-    density = w_sum ./ dx 
-    velocity = v_sum ./ (dx .* density)
+    #assign the properties 
+    fluid_properties.dens .= w_sum ./ volumes 
+    fluid_properties.vel .= v_sum ./ (volumes .* fluid_properties.dens)
 
     #do the temperature calculation 
-    @inbounds for i in eachindex(Particles.pos)
+    for i=1:n_p 
         #calculate relative position 
-        x_rel = abs.(x .- x_p[i]) ./ dx
-
-        T_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) .* w_p[i] .* (v_p[i] .-velocity[x_rel .< 1]).^2
+        x_rel = abs.(cell_centers .- particles.pos[i]) ./ volumes
+        #particle contribution to temperature 
+        temp_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) .* particles.weight[i] .* (particles.vel[i] .-fluid_properties.vel[x_rel .< 1]).^2
     end
+    #normalize
+    fluid_properties.temp .= sqrt.(1 * temp_sum ./ ((n.-1)./n.* fluid_properties.dens .*volumes))
+    #calculation for average weight
+    #hold time average interval to 50 for now (see Dominguez Vazquez thesis) can have as an input parameter later 
+    n_k = 50 
+    fluid_properties.avg_weight .= (fluid_properties.avg_weight * (n_k - 1 ) + (w_sum ./ n)) / n_k  
+
     
-    temperature = sqrt.(1 * T_sum ./ ((N.-1)./N.* density .*dx))#hard coded Xe mass
-
-    N_k = 50 
-    w_bar = (w_bar * (N_k - 1 ) + (w_sum ./ N)) / N_k  
-
-    return density, velocity, temperature, w_bar, N 
+    return fluid_properties
 end
-=#
+
 
 end

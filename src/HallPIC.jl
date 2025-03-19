@@ -75,6 +75,7 @@ struct ParticleContainer{T<:AbstractFloat}
     pos::Vector{T}
     vel::Vector{T}
     acc::Vector{T}
+    inds::Vector{Int}
 	species::Species
 end
 
@@ -83,8 +84,9 @@ function ParticleContainer{T}(N, species::Species) where T<:AbstractFloat
 	pos = zeros(T, N)
 	vel = zeros(T, N)
 	acc = zeros(T, N)
+    inds = zeros(Int, N)
 	return ParticleContainer{T}(
-		weight, pos, vel, acc, species 
+		weight, pos, vel, acc, inds, species 
 	)
 end
 
@@ -112,8 +114,10 @@ function add_particles!(pc::ParticleContainer{T}, x::Vector{T}, v::Vector{T}, w:
 	append!(pc.weight, w)
 	# extend acceleration array to correct size and fill with zeros
 	resize!(pc.acc, N+M)
+    resize!(pc.inds, N+M)
 	for i in 1:M
 		pc.acc[N+i] = zero(T)
+        pc.inds[N+i] = zero(T)
 	end
 	return pc
 end
@@ -253,78 +257,70 @@ end
 
 const HeavySpeciesBoundary = Union{OpenBoundary, WallBoundary}
 
-struct Face
-    pos::Float32
-    area::Float32
-end
-
-struct Cell
-    left_face::Face
-    right_face::Face
-    center::Float32
-    volume::Float32
-    width::Float32
-end
-
 struct Grid
-    cells::Vector{Cell}
-    faces::Vector{Face}
+    cell_centers::Vector{Float64}
+    cell_volumes::Vector{Float64}
+    face_centers::Vector{Float64}
+    face_areas::Vector{Float64}
     left_boundary::HeavySpeciesBoundary
     right_boundary::HeavySpeciesBoundary
 end
 
-function Grid(num_cells, left, right, area, left_boundary, right_boundary)
+function Grid(num_cells::Integer, left, right, area, left_boundary = OpenBoundary(), right_boundary = OpenBoundary())
     dz = (right - left) / num_cells
 
-    faces = [
-        Face(pos, area) for pos in range(left-dz, right+dz, step=dz)
-    ]
+    face_centers = collect(range(left - dz, right + dz, step = dz))
+    face_areas = fill(area, length(face_centers))
 
-    cells = [
-        let
-            center = 0.5 * (left_face.pos + right_face.pos)
-            width = right_face.pos - left_face.pos
-            volume = 0.5 * dz * (left_face.area + right_face.area)
-            Cell(left_face, right_face, center, volume, width)
-        end
-        for (left_face, right_face) in zip(faces[1:end-1], faces[2:end])
-    ]
+    cell_centers = zeros(num_cells+2)
+    cell_volumes = zeros(num_cells+2)
 
-    return Grid(cells, faces, left_boundary, right_boundary)
+    for i in eachindex(cell_centers)
+        z_L, z_R = face_centers[i], face_centers[i+1]
+        cell_centers[i] = 0.5 * (z_L + z_R)
+        cell_volumes[i] = area * (z_R - z_L)
+
+    end
+
+    return Grid(cell_centers, cell_volumes, face_centers, face_areas, left_boundary, right_boundary)
 end
 
+"""
+$(TYPEDSIGNATURES)
+"""
+function locate_particles!(pc::ParticleContainer{T}, grid::Grid) where T
+    for (i, x) in enumerate(pc.pos)
+        cell_index = searchsortedfirst(grid.face_centers, x) - 1
+        center_pos = grid.cell_centers[cell_index]
+        pc.inds[i] = copysign(cell_index, x - center_pos)
+    end
 
-function deposit(cell_centers, volumes, fluid_properties::SpeciesProperties{T}, particles::ParticleContainer) where T
-    """
-    Initialize a set of particles using a grid and properties 
-    Inputs: 
-        cell_centers (N_cell+1 array of floats)
-            positions of cell centers 
-        volumes (N_cell array of floats)
-            cell widths/volume
-        Fluid_Properties (Species properties object)
-            object containing fluid properties for the species on the grid, to be updated
-        Particles (Particle Object)
-            object containing particle information 
-    Outputs:
-        Fluid_Properties (Species properties object)
-            updated fluid properties for the species on the grid
-    """
+    return pc.inds
+end
 
-    #initialize sums 
+"""
+$(TYPEDSIGNATURES)
+
+Deposit particle properties onto a grid
+"""
+function deposit(fluid_properties::SpeciesProperties{T}, particles::ParticleContainer, grid::Grid) where T
+
+    # initialize sums 
     n_cell = length(cell_centers)
     w_sum = zeros(T, n_cell)
     v_sum = zeros(T, n_cell)
     temp_sum = zeros(T, n_cell)    
     n = zeros(T, n_cell)
 
-    #pull quantities
-    n_p = size(particles.pos)[1]
-    #loop over particles
-    #technically there's a loop over cells in here too, but that tis handled with logical indexing
-    for i=1:n_p
+    z0 = grid.faces[2]
+    z1 = grid.faces[end-1]
+    L = z1 - z0
+
+    # loop over particles, deposit density and mean velocity
+    for i in eachindex(particles.pos)
         #calculate relative position 
         x_rel = abs.(cell_centers .- particles.pos[i]) ./ volumes
+
     
         #contribute to cells that particles touch 
         w_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) * particles.weight[i]

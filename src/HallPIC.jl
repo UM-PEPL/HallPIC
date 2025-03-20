@@ -106,21 +106,20 @@ end
 $(TYPEDSIGNATURES)
 Add particles to a `ParticleContainer`.
 """
-function add_particles!(pc::ParticleContainer{T}, x::Vector{T}, v::Vector{T}, w::Vector{T}) where T
+function add_particles!(pc::ParticleContainer{T}, x::Vector{T}, v::Vector{T}, w::Vector{T}, i::Vector{Int}) where T
 	# check that new arrays have same length
 	M = length(x)
 	N = length(pc.pos)
 	@assert M == length(v) && M == length(w)
-	# append position, velocity, weight to pc arrays
+	# append position, velocity, weight, index to pc arrays
 	append!(pc.pos, x)
 	append!(pc.vel, v)
 	append!(pc.weight, w)
+    append!(pc.inds, i)
 	# extend acceleration array to correct size and fill with zeros
 	resize!(pc.acc, N+M)
-    resize!(pc.inds, N+M)
 	for i in 1:M
 		pc.acc[N+i] = zero(T)
-        pc.inds[N+i] = zero(T)
 	end
 	return pc
 end
@@ -224,6 +223,7 @@ function initialize_particles(sp::SpeciesProperties{T}, grid, particles_per_cell
 	pos_buf = zeros(T, particles_per_cell)
 	vel_buf = zeros(T, particles_per_cell)
 	weight_buf = zeros(T, particles_per_cell)
+    ind_buf = ones(Int, particles_per_cell)
 	@assert length(grid.cell_centers) == length(sp)
 
 	pc = ParticleContainer{T}(0, sp.species)
@@ -233,12 +233,11 @@ function initialize_particles(sp::SpeciesProperties{T}, grid, particles_per_cell
     T_itp = LinearInterpolation(sp.temp, grid.cell_centers)
 
     for i in 2:length(grid.cell_centers) - 1
-        z = grid.cell_centers[i]
         V = grid.cell_volumes[i]
 		z_L = grid.face_centers[i]
 		z_R = grid.face_centers[i+1]
 		dz = z_R - z_L
-
+ 
 		Random.rand!(pos_buf)
 		@. pos_buf = dz * pos_buf + z_L 
 
@@ -248,7 +247,7 @@ function initialize_particles(sp::SpeciesProperties{T}, grid, particles_per_cell
 
 		@. weight_buf = n_itp(pos_buf) / particles_per_cell * V
 
-		add_particles!(pc, pos_buf, vel_buf, weight_buf)
+		add_particles!(pc, pos_buf, vel_buf, weight_buf, ind_buf * i)
 	end
 
 	return pc
@@ -301,45 +300,6 @@ function locate_particles!(pc::ParticleContainer{T}, grid::Grid) where T
     end
 
     return pc.inds
-end
-
-"""
-$(TYPEDSIGNATURES)
-Create a particle container and fill it with particles matching the macroscopic properties
-from a provided SpeciesProperties object.
-
-Accounting note: the edges of cell i are edges[i] and edges[i+1]
-"""
-function initialize_particles(sp::SpeciesProperties{T}, grid::Grid, particles_per_cell) where T
-	pos_buf = zeros(T, particles_per_cell)
-	vel_buf = zeros(T, particles_per_cell)
-	weight_buf = zeros(T, particles_per_cell)
-
-	num_cells = length(grid.face_centers) - 1
-
-	@assert num_cells == length(sp)
-
-	pc = ParticleContainer{T}(0, sp.species)
-
-	for (i, (V, cell)) in enumerate(zip(grid.cell_volumes, sp))
-		z_L = grid.face_centers[i]
-		z_R = grid.face_centers[i+1]
-		dz = z_R - z_L
-
-		Random.rand!(pos_buf)
-		@. pos_buf = dz * pos_buf + z_L 
-
-		Random.randn!(vel_buf)
-		v_th = sqrt(cell.temp / pc.species.gas.mass)
-		@. vel_buf = vel_buf * v_th + cell.vel
-
-		weight = cell.dens * V / particles_per_cell
-		@. weight_buf = weight
-
-		add_particles!(pc, pos_buf, vel_buf, weight_buf)
-	end
-
-	return pc
 end
 
 """
@@ -523,7 +483,7 @@ function daughter_particle_generation(grid::Grid, reaction::Reaction, reactant_p
         n_d = products[p].n_d#number of desired particles touching cell, hyperparamter from the simualtion
         #for each cell, add particles
         n_cell = length(grid.cells)
-        for i=1:n_cell
+        for i=2:n_cell-1
             #determine the number of partices to generate
             w_gen = product_properties.avg_weight[i] * ((sum(products[p].inds==i)+sum(products[p].inds==i-1)+sum(products[p].inds == -(i+1)))/n_d)#check for particles in the cell 
             n_gen = Int32(reaction.products[p].coefficient * reaction.delta_n[i] / w_gen)
@@ -543,7 +503,7 @@ function daughter_particle_generation(grid::Grid, reaction::Reaction, reactant_p
             weight_buf = w_gen.*ones(n_gen)
                 
             #actual generation 
-            add_particles!(product, pos_buf, vel_buf, weight_buf)
+            add_particles!(product, pos_buf, vel_buf, weight_buf, ones(n_gen).*i)
         end
     end 
 

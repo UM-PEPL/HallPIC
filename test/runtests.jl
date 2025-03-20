@@ -140,8 +140,9 @@ function test_add_particles(::Type{T}) where T
 	pos = [T(1.57), T(0.51)]
 	vel = [T(19823.1041), T(981.471)]
 	weight = [T(1.589e16), T(1.589e16)]
+	ind = [1, 2]
 
-	particles = hp.add_particles!(particles, pos, vel, weight)
+	particles = hp.add_particles!(particles, pos, vel, weight, ind)
 
 	#check them 
 	@test length(particles.pos) == 2
@@ -159,6 +160,10 @@ function test_add_particles(::Type{T}) where T
 	@test length(particles.acc) == 2
 	@test particles.acc[1] == 0
 	@test particles.acc[2] == 0
+
+	@test length(particles.inds) == 2
+	@test particles.inds[1] == 1
+	@test particles.inds[2] == 2
 end
 
 @testset "Add particles" begin
@@ -426,8 +431,8 @@ function test_reaction_step(::Type{T}) where T
 	ions = hp.initialize_particles(ion_properties, grid, n_n)
 
 	#deposit to grid 
-	neutral_properties = hp.deposit(neutral_properties, neutrals, grid)
-	ion_properties = hp.deposit(ion_properties, ions, grid) 
+	neutral_properties = hp.deposit!(neutral_properties, neutrals, grid)
+	ion_properties = hp.deposit!(ion_properties, ions, grid) 
 
 	#initialization for reaction properties 
 

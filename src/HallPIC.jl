@@ -51,10 +51,10 @@ $(TYPEDFIELDS)
 @kwdef struct Species
 	gas::Gas
     reactions::Vector{UInt8}
-	charge::UInt8
+	charge::Int8
 end
 
-@inline (g::Gas)(Z::Integer) = Species(gas=g, charge=UInt8(Z), reactions=UInt8[])
+@inline (g::Gas)(Z::Integer) = Species(gas=g, charge=Int8(Z), reactions=UInt8[])
 
 # Helper methods
 @inline mass(s::Species) = s.gas.mass
@@ -417,6 +417,23 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
     end
     
     return fluid_properties
+end
+
+function calc_electron_density_and_avg_charge!(n_e::Vector{T}, avg_charge::Vector{T}, species::Vector{SpeciesProperties{T}}) where T
+    n_e .= zero(T)
+    avg_charge .= zero(T)
+    for sp in species
+        Z = sp.species.charge
+        if Z == 0
+            continue
+        end
+        for (i, n_s) in enumerate(sp.dens)
+            n_e[i] += n_s * Z
+            avg_charge[i] += n_s
+        end
+    end
+    @. avg_charge = n_e / avg_charge
+    return n_e, avg_charge
 end
 
 #======================================================

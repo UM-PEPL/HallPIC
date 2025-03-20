@@ -353,6 +353,38 @@ end
 	end
 end
 
+@testset "Electron density and average charge" begin
+	species = [
+		Xenon(0), Xenon(1), Xenon(2), Xenon(3), Xenon(-1)
+	]
+
+	n_0 = 1f18 / hp.n_0
+
+	densities = (length(species):-1:1) .* n_0
+	n_e_exact = sum(sp.charge * dens for (sp, dens) in zip(species, densities))
+	n_i_exact = sum(dens for (sp, dens) in zip(species, densities) if sp.charge != 0)
+	avg_Z_exact = n_e_exact / n_i_exact
+
+	num_cells=10
+
+	for T in [Float32, Float64]
+		fluid_containers = [
+			hp.SpeciesProperties{T}(num_cells, sp) for sp in species
+		]
+
+		for (fluid, dens) in zip(fluid_containers, densities)
+			fluid.dens .= dens
+		end
+
+		n_e = zeros(T, num_cells)
+		avg_Z = zeros(T, num_cells)
+		hp.calc_electron_density_and_avg_charge!(n_e, avg_Z, fluid_containers)
+
+		@test all(n_e .== T(n_e_exact))
+		@test all(avg_Z .== T(avg_Z_exact))
+	end
+end
+
 function test_read_reaction_table()
 	#load the reaction 
 	filepath = "../reactions/ionization_Xe_Xe+.dat"

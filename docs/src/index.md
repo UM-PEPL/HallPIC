@@ -59,3 +59,7 @@ Types of test
 It would be nice if particles could move in 2D so that we can more self-consistently model wall losses.
 This could move the code in a quasi-2D direction, given some assumptions.
 Axisymmetry complicates the PIC update significantly, however, so this needs to be done carefully.
+
+```@autodocs
+Modules = [HallPIC]
+```

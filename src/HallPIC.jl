@@ -217,31 +217,33 @@ from a provided SpeciesProperties object.
 
 Accounting note: the edges of cell i are edges[i] and edges[i+1]
 """
-function initialize_particles(sp::SpeciesProperties{T}, edges, volumes, particles_per_cell) where T
+function initialize_particles(sp::SpeciesProperties{T}, grid, particles_per_cell) where T
 	pos_buf = zeros(T, particles_per_cell)
 	vel_buf = zeros(T, particles_per_cell)
 	weight_buf = zeros(T, particles_per_cell)
-
-	num_cells = length(edges) - 1
-
-	@assert num_cells == length(sp)
+	@assert length(grid.cell_centers) == length(sp)
 
 	pc = ParticleContainer{T}(0, sp.species)
 
-	for (i, (V, cell)) in enumerate(zip(volumes, sp))
-		z_L = edges[i]
-		z_R = edges[i+1]
+    n_itp = LinearInterpolation(sp.dens, grid.cell_centers)
+    u_itp = LinearInterpolation(sp.vel, grid.cell_centers)
+    T_itp = LinearInterpolation(sp.temp, grid.cell_centers)
+
+    for i in 2:length(grid.cell_centers) - 1
+        z = grid.cell_centers[i]
+        V = grid.cell_volumes[i]
+		z_L = grid.face_centers[i]
+		z_R = grid.face_centers[i+1]
 		dz = z_R - z_L
 
 		Random.rand!(pos_buf)
 		@. pos_buf = dz * pos_buf + z_L 
 
 		Random.randn!(vel_buf)
-		v_th = sqrt(cell.temp / pc.species.gas.mass)
-		@. vel_buf = vel_buf * v_th + cell.vel
+		@. vel_buf *= sqrt(T_itp(pos_buf) / pc.species.gas.mass)
+		@. vel_buf = vel_buf + u_itp(pos_buf)
 
-		weight = cell.dens * V / particles_per_cell
-		@. weight_buf = weight
+		@. weight_buf = n_itp(pos_buf) / particles_per_cell * V
 
 		add_particles!(pc, pos_buf, vel_buf, weight_buf)
 	end
@@ -301,55 +303,115 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Deposit particle properties onto a grid
+Deposit particle properties into a gridded SpeciesProperties object
 """
-function deposit(fluid_properties::SpeciesProperties{T}, particles::ParticleContainer, grid::Grid) where T
+function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleContainer, grid::Grid, avg_interval=50) where T
 
-    # initialize sums 
-    n_cell = length(cell_centers)
-    w_sum = zeros(T, n_cell)
-    v_sum = zeros(T, n_cell)
-    temp_sum = zeros(T, n_cell)    
-    n = zeros(T, n_cell)
+    # zero density, velocity, temperature
+    fluid_properties.dens .= zero(T)
+    fluid_properties.vel .= zero(T)
+    fluid_properties.temp .= zero(T)
 
-    z0 = grid.faces[2]
-    z1 = grid.faces[end-1]
-    L = z1 - z0
+    # loop over particles, deposit density and momentum density
+    for (ip, z_part) in enumerate(particles.pos)
+        # The cell index is positive if the particle is right of the cell center,
+        # or negative if it is left of the cell center
+        cell_index = particles.inds[ip]
+        s, ic = sign(cell_index), abs(cell_index)
 
-    # loop over particles, deposit density and mean velocity
-    for i in eachindex(particles.pos)
-        #calculate relative position 
-        x_rel = abs.(cell_centers .- particles.pos[i]) ./ volumes
+        # don't deposit into ghost cells
+        if cell_index == -2 || cell_index == length(grid.cell_centers)-1
+            s, ic = 0, abs(cell_index)
+        else
+            s, ic = sign(cell_index), abs(cell_index)
+        end
 
-    
-        #contribute to cells that particles touch 
-        w_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) * particles.weight[i]
-        v_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) * particles.weight[i] * particles.vel[i]
-        
-        #count number of particles in the cell 
-        n[x_rel .< 1] .+= 1 
+        # Grid information and cell weighting
+        inv_vol_c = 1 / grid.cell_volumes[ic]
+        inv_vol_s = 1 / grid.cell_volumes[ic+s]
+        z_cell = grid.cell_centers[ic]
+        dz = grid.face_centers[ic+1] - grid.face_centers[ic]
+        t = abs((z_part - z_cell) / dz)
+
+        # Particle velocity and weight
+        up = particles.vel[ip]
+        wp = particles.weight[ip]
+
+        # Density contribution to each cell
+        dens_c = (1 - t) * wp * inv_vol_c
+        dens_s = t * wp * inv_vol_s
+        fluid_properties.dens[ic]   += dens_c 
+        fluid_properties.dens[ic+s] += dens_s
+
+        # Momentum contribution to each cell
+        fluid_properties.vel[ic]    += dens_c * up
+        fluid_properties.vel[ic+s]  += dens_s * up
+
+        # Use temperature as a buffer to count the number of particles in this cell
+        fluid_properties.temp[ic]   += (1 - t)
+        fluid_properties.temp[ic+s] += t
     end
 
+    # calculation for average weight
 
-    #normalization
-    #assign the properties 
-    fluid_properties.dens .= w_sum ./ volumes 
-    fluid_properties.vel .= v_sum ./ (volumes .* fluid_properties.dens)
+    # Calculate cell-centered fluid properties
+    for ic in 2:length(grid.cell_centers)-1 
+        density = fluid_properties.dens[ic]
+        num_particles = fluid_properties.temp[ic]
 
-    #do the temperature calculation 
-    for i=1:n_p 
-        #calculate relative position 
-        x_rel = abs.(cell_centers .- particles.pos[i]) ./ volumes
-        #particle contribution to temperature 
-        temp_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) .* particles.weight[i] .* (particles.vel[i] .-fluid_properties.vel[x_rel .< 1]).^2
+        # Get avg. velocity from momentum density
+        fluid_properties.vel[ic] /= density
+
+        # Compute smoothed average weight in cell
+        new_avg_wt = density / num_particles * grid.cell_volumes[ic]
+        old_avg_wt = fluid_properties.avg_weight[ic]
+        fluid_properties.avg_weight[ic] = ((avg_interval - 1) * old_avg_wt + new_avg_wt) / avg_interval
     end
-    #normalize
-    fluid_properties.temp .= sqrt.(1 * temp_sum ./ ((n.-1)./n.* fluid_properties.dens .*volumes))
-    #calculation for average weight
-    #hold time average interval to 50 for now (see Dominguez Vazquez thesis) can have as an input parameter later 
-    n_k = 50 
-    fluid_properties.avg_weight .= (fluid_properties.avg_weight * (n_k - 1 ) + (w_sum ./ n)) / n_k  
 
+    # Zero temperature again
+    fluid_properties.temp .= 0.0
+
+    # Calculate energy density
+    for (ip, z_part) in enumerate(particles.pos)
+        # The cell index is positive if the particle is right of the cell center,
+        # or negative if it is left of the cell center
+        cell_index = particles.inds[ip]
+
+        # don't deposit into ghost cells
+        if cell_index == -2 || cell_index == length(grid.cell_centers)-1
+            s, ic = 0, abs(cell_index)
+        else
+            s, ic = sign(cell_index), abs(cell_index)
+        end
+
+        # Grid information and cell weighting
+        inv_vol_c = 1.0 / grid.cell_volumes[ic]
+        inv_vol_s = 1.0 / grid.cell_volumes[ic+s]
+        z_cell = grid.cell_centers[ic]
+        dz = grid.face_centers[ic+1] - grid.face_centers[ic]
+        t = abs((z_part - z_cell) / dz)
+
+        # Particle velocity and weight
+        up = particles.vel[ip]
+        wp = particles.weight[ip]
+
+        # Cell average velocity 
+        vel_c = fluid_properties.vel[ic]
+        vel_s = fluid_properties.vel[ic+s]
+
+        # Accumulate energy density
+        dens_c = (1 - t) * wp * inv_vol_c
+        dens_s = t * wp * inv_vol_s
+        fluid_properties.temp[ic] += dens_c * (up - vel_c)^2
+        fluid_properties.temp[ic+s] += dens_s * (up - vel_s)^2
+    end
+
+    m = fluid_properties.species.gas.mass
+
+    # Convert energy density to nondimensional temperature
+    for ic in 2:length(grid.cell_centers)-1 
+        fluid_properties.temp[ic] *= m / fluid_properties.dens[ic]
+    end
     
     return fluid_properties
 end

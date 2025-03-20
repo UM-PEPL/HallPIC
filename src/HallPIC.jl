@@ -305,45 +305,6 @@ end
 
 """
 $(TYPEDSIGNATURES)
-Create a particle container and fill it with particles matching the macroscopic properties
-from a provided SpeciesProperties object.
-
-Accounting note: the edges of cell i are edges[i] and edges[i+1]
-"""
-function initialize_particles(sp::SpeciesProperties{T}, grid::Grid, particles_per_cell) where T
-	pos_buf = zeros(T, particles_per_cell)
-	vel_buf = zeros(T, particles_per_cell)
-	weight_buf = zeros(T, particles_per_cell)
-
-	num_cells = length(grid.face_centers) - 1
-
-	@assert num_cells == length(sp)
-
-	pc = ParticleContainer{T}(0, sp.species)
-
-	for (i, (V, cell)) in enumerate(zip(grid.cell_volumes, sp))
-		z_L = grid.face_centers[i]
-		z_R = grid.face_centers[i+1]
-		dz = z_R - z_L
-
-		Random.rand!(pos_buf)
-		@. pos_buf = dz * pos_buf + z_L 
-
-		Random.randn!(vel_buf)
-		v_th = sqrt(cell.temp / pc.species.gas.mass)
-		@. vel_buf = vel_buf * v_th + cell.vel
-
-		weight = cell.dens * V / particles_per_cell
-		@. weight_buf = weight
-
-		add_particles!(pc, pos_buf, vel_buf, weight_buf)
-	end
-
-	return pc
-end
-
-"""
-$(TYPEDSIGNATURES)
 
 Deposit particle properties into a gridded SpeciesProperties object
 """

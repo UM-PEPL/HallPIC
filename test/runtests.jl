@@ -426,8 +426,8 @@ function test_reaction_step(::Type{T}) where T
 	ions = hp.initialize_particles(ion_properties, grid, n_n)
 
 	#deposit to grid 
-	neutral_properties = hp.deposit(neutral_properties, neutrals, grid)
-	ion_properties = hp.deposit(ion_properties, ions, grid) 
+	neutral_properties = hp.deposit!(neutral_properties, neutrals, grid)
+	ion_properties = hp.deposit!(ion_properties, ions, grid) 
 
 	#initialization for reaction properties 
 

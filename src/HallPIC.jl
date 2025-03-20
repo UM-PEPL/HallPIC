@@ -210,47 +210,8 @@ function Base.iterate(sp::SpeciesProperties, i)
 end
 
 #======================================================
-Functions using SpeciesProperties
+Geometry
 ======================================================#
-
-"""
-$(TYPEDSIGNATURES)
-Create a particle container and fill it with particles matching the macroscopic properties
-from a provided SpeciesProperties object.
-
-Accounting note: the edges of cell i are edges[i] and edges[i+1]
-"""
-function initialize_particles(sp::SpeciesProperties{T}, edges, volumes, particles_per_cell) where T
-	pos_buf = zeros(T, particles_per_cell)
-	vel_buf = zeros(T, particles_per_cell)
-	weight_buf = zeros(T, particles_per_cell)
-
-	num_cells = length(edges) - 1
-
-	@assert num_cells == length(sp)
-
-	pc = ParticleContainer{T}(0, sp.species)
-
-	for (i, (V, cell)) in enumerate(zip(volumes, sp))
-		z_L = edges[i]
-		z_R = edges[i+1]
-		dz = z_R - z_L
-
-		Random.rand!(pos_buf)
-		@. pos_buf = dz * pos_buf + z_L 
-
-		Random.randn!(vel_buf)
-		v_th = sqrt(cell.temp / pc.species.gas.mass)
-		@. vel_buf = vel_buf * v_th + cell.vel
-
-		weight = cell.dens * V / particles_per_cell
-		@. weight_buf = weight
-
-		add_particles!(pc, pos_buf, vel_buf, weight_buf)
-	end
-
-	return pc
-end
 
 struct OpenBoundary end
 
@@ -303,26 +264,62 @@ end
 
 """
 $(TYPEDSIGNATURES)
+Create a particle container and fill it with particles matching the macroscopic properties
+from a provided SpeciesProperties object.
+
+Accounting note: the edges of cell i are edges[i] and edges[i+1]
+"""
+function initialize_particles(sp::SpeciesProperties{T}, grid::Grid, particles_per_cell) where T
+	pos_buf = zeros(T, particles_per_cell)
+	vel_buf = zeros(T, particles_per_cell)
+	weight_buf = zeros(T, particles_per_cell)
+
+	num_cells = length(grid.face_centers) - 1
+
+	@assert num_cells == length(sp)
+
+	pc = ParticleContainer{T}(0, sp.species)
+
+	for (i, (V, cell)) in enumerate(zip(grid.cell_volumes, sp))
+		z_L = grid.face_centers[i]
+		z_R = grid.face_centers[i+1]
+		dz = z_R - z_L
+
+		Random.rand!(pos_buf)
+		@. pos_buf = dz * pos_buf + z_L 
+
+		Random.randn!(vel_buf)
+		v_th = sqrt(cell.temp / pc.species.gas.mass)
+		@. vel_buf = vel_buf * v_th + cell.vel
+
+		weight = cell.dens * V / particles_per_cell
+		@. weight_buf = weight
+
+		add_particles!(pc, pos_buf, vel_buf, weight_buf)
+	end
+
+	return pc
+end
+
+"""
+$(TYPEDSIGNATURES)
 
 Deposit particle properties onto a grid
 """
+
 function deposit(fluid_properties::SpeciesProperties{T}, particles::ParticleContainer, grid::Grid) where T
 
     # initialize sums 
-    n_cell = length(cell_centers)
+    n_cell = length(grid.cell_centers)
     w_sum = zeros(T, n_cell)
     v_sum = zeros(T, n_cell)
     temp_sum = zeros(T, n_cell)    
     n = zeros(T, n_cell)
 
-    z0 = grid.faces[2]
-    z1 = grid.faces[end-1]
-    L = z1 - z0
-
     # loop over particles, deposit density and mean velocity
     for i in eachindex(particles.pos)
         #calculate relative position 
-        x_rel = abs.(cell_centers .- particles.pos[i]) ./ volumes
+        x_rel = abs.(grid.cell_centers .- particles.pos[i]) ./ grid.cell_volumes
 
     
         #contribute to cells that particles touch 
@@ -336,18 +333,18 @@ function deposit(fluid_properties::SpeciesProperties{T}, particles::ParticleCont
 
     #normalization
     #assign the properties 
-    fluid_properties.dens .= w_sum ./ volumes 
-    fluid_properties.vel .= v_sum ./ (volumes .* fluid_properties.dens)
+    fluid_properties.dens .= w_sum ./ grid.cell_volumes 
+    fluid_properties.vel .= v_sum ./ (grid.cell_volumes .* fluid_properties.dens)
 
     #do the temperature calculation 
-    for i=1:n_p 
+    for i in eachindex(particles.pos)
         #calculate relative position 
-        x_rel = abs.(cell_centers .- particles.pos[i]) ./ volumes
+        x_rel = abs.(grid.cell_centers .- particles.pos[i]) ./ grid.cell_volumes
         #particle contribution to temperature 
         temp_sum[x_rel .< 1] += (1 .- x_rel[x_rel .< 1]) .* particles.weight[i] .* (particles.vel[i] .-fluid_properties.vel[x_rel .< 1]).^2
     end
     #normalize
-    fluid_properties.temp .= sqrt.(1 * temp_sum ./ ((n.-1)./n.* fluid_properties.dens .*volumes))
+    fluid_properties.temp .= sqrt.(1 * temp_sum ./ ((n.-1)./n.* fluid_properties.dens .*grid.cell_volumes))
     #calculation for average weight
     #hold time average interval to 50 for now (see Dominguez Vazquez thesis) can have as an input parameter later 
     n_k = 50 

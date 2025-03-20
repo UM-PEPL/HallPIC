@@ -203,63 +203,6 @@ end
 end
 
 
-function test_initial_deposition(_::Type{T}) where T
-
-	#define the cell properties
-	n_cell = 4
-	n_n = 50000#per cell 
-
-
-	#seed properties/initialize cell arrays 
-	neutral_properties = hp.SpeciesProperties{Float64}(n_cell, Xenon(0))
-	base = ones(n_cell)
-	neutral_properties.dens .= base .* 1e18#1/m^3
-	neutral_properties.vel .= base .* 300
-	neutral_properties.temp .= base .* (500 / 11604) #eV
-	x = 0:(1/n_cell):1
-	x_c = (x[2:end] + x[1:end-1]) / 2
-	dx = x[2:end] - x[1:end-1]
-
-	neutrals = hp.initialize_particles(neutral_properties, x, dx, n_n)
-
-	#check that particles are in bounds and limits are correct
-	@test size(neutrals.pos)[1] == n_cell * n_n
-	min, max = extrema(neutrals.pos)
-	@test max <= 1
-	@test min >= 0
-
-	min, max = extrema(neutrals.weight)
-	@test max ≈ 5e12
-	@test min ≈ 5e12
-
-	min, max = extrema(neutrals.vel)
-	thermal_speed = sqrt(2 * hp.q_e * (500 / 11604) / (neutrals.species.gas.mass * hp.m_0))
-	@test max <= 300 + 10 * thermal_speed
-	@test min >= 300 - 10 * thermal_speed
-
-	
-	#deposit to the cells 
-	new_neutral_properties = hp.deposit(x_c, dx, neutral_properties, neutrals)
-
-	#check that interior cells reproduce
-	@test isapprox(new_neutral_properties.dens[2], neutral_properties.dens[2]; rtol = 0.01)
-	@test isapprox(new_neutral_properties.vel[2], neutral_properties.vel[2]; rtol = 0.01)
-	@test isapprox(new_neutral_properties.temp[2], neutral_properties.temp[2]; rtol = 0.01)
-
-	@test isapprox(new_neutral_properties.dens[3], neutral_properties.dens[3]; rtol = 0.01)
-	@test isapprox(new_neutral_properties.vel[3], neutral_properties.vel[3]; rtol = 0.01)
-	@test isapprox(new_neutral_properties.temp[3], neutral_properties.temp[3]; rtol = 0.01)
-
-end
-
-#=
-@testset "Initial Deposition" begin
-	for T in [Float32, Float64]
-		test_initial_deposition(T)
-	end
-end
-=#
-
 @testset "Grid construction" begin
 	N = 100
 	left_boundary = hp.OpenBoundary()
@@ -305,6 +248,62 @@ end
 	@test pc.inds[6] == 2
 	@test pc.inds[7] == N+1
 end
+
+function test_initial_deposition(_::Type{T}) where T
+
+	#define the cell properties
+	n_cell = 4
+	n_n = 50000#per cell 
+
+
+	#seed properties/initialize cell arrays 
+	neutral_properties = hp.SpeciesProperties{Float64}(n_cell, Xenon(0))
+	base = ones(n_cell)
+	neutral_properties.dens .= base .* 1e18#1/m^3
+	neutral_properties.vel .= base .* 300
+	neutral_properties.temp .= base .* (500 / 11604) #eV
+	grid = hp.Grid(2, 0, 1, 1)
+
+	neutrals = hp.initialize_particles(neutral_properties, grid, n_n)
+
+	#check that particles are in bounds and limits are correct
+	@test size(neutrals.pos)[1] == n_cell * n_n
+	min, max = extrema(neutrals.pos)
+	@test max <= 1.5
+	@test min >= -0.5
+
+	min, max = extrema(neutrals.weight)
+	@test max ≈ 1e13
+	@test min ≈ 1e13
+
+	min, max = extrema(neutrals.vel)
+	thermal_speed = sqrt(2 * hp.q_e * (500 / 11604) / (neutrals.species.gas.mass * hp.m_0))
+	@test max <= 300 + 10 * thermal_speed
+	@test min >= 300 - 10 * thermal_speed
+
+	
+	#deposit to the cells 
+	new_neutral_properties = hp.deposit(neutral_properties, neutrals, grid)
+
+	#check that interior cells reproduce
+	@test isapprox(new_neutral_properties.dens[2], neutral_properties.dens[2]; rtol = 0.01)
+	@test isapprox(new_neutral_properties.vel[2], neutral_properties.vel[2]; rtol = 0.01)
+	@test isapprox(new_neutral_properties.temp[2], neutral_properties.temp[2]; rtol = 0.01)
+
+	@test isapprox(new_neutral_properties.dens[3], neutral_properties.dens[3]; rtol = 0.01)
+	@test isapprox(new_neutral_properties.vel[3], neutral_properties.vel[3]; rtol = 0.01)
+	@test isapprox(new_neutral_properties.temp[3], neutral_properties.temp[3]; rtol = 0.01)
+
+end
+
+
+@testset "Initial Deposition" begin
+	for T in [Float32, Float64]
+		test_initial_deposition(T)
+	end
+end
+
+
 function test_read_reaction_table()
 	#load the reaction 
 	filepath = "../reactions/ionization_Xe_Xe+.dat"
@@ -362,6 +361,7 @@ function test_reaction_step(::Type{T}) where T
 
 	#seed properties/initialize cell arrays 
 	n_cell = 2 
+	n_n = 500
 	neutral_properties = hp.SpeciesProperties{Float64}(n_cell+2, Xenon(0))
 	ion_properties = hp.SpeciesProperties{Float64}(n_cell+2, Xenon(1))
 	base = ones(n_cell+2)
@@ -371,18 +371,14 @@ function test_reaction_step(::Type{T}) where T
 	ion_properties.dens .= base .* 1e16#1/m^3
 	ion_properties.vel .= base .* 5000
 	ion_properties.temp .= base .* 0.1 #eV
-	grid = hp.Grid(2, 0, 1, 3.14, hp.OpenBoundary(), hp.OpenBoundary())
-	x = 0:(1/n_cell):1
-	x_c = (x[2:end] + x[1:end-1]) / 2
-	dx = x[2:end] - x[1:end-1]
-
+	grid = hp.Grid(2, 0, 1, 3.14)
 	
-	neutrals = hp.initialize_particles(neutral_properties, grid.cells[:].left_face, grid.cells.width, n_n)
-	ions = hp.initialize_particles(ion_properties, grid.cells.left_face, grid.cells.width, n_n)
+	neutrals = hp.initialize_particles(neutral_properties, grid, n_n)
+	ions = hp.initialize_particles(ion_properties, grid, n_n)
 
 	#deposit to grid 
-	neutral_properties = hp.deposit(grid.cells.center, grid.cells.width, neutral_properties, neutrals)
-	ion_properties = hp.deposit(grid.cells.center, grid.cells.width, ion_properties, ions)
+	neutral_properties = hp.deposit(neutral_properties, neutrals, grid)
+	ion_properties = hp.deposit(ion_properties, ions, grid) 
 
 	#initialization for reaction properties 
 

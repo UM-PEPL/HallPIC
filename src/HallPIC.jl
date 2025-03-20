@@ -433,4 +433,26 @@ function calc_electron_density_and_avg_charge!(n_e::Vector{T}, avg_charge::Vecto
     return n_e, avg_charge
 end
 
+function boltzmann_electric_field_and_potential!(E, phi, n_e, T_e, grid)
+    # note: E is stored on edges
+    # V - V_0 = Te ln(n) / ln(n_0)
+    # -dPhi/dz = E = Te d(ln(n))/dz
+    phi_0 = 0.0
+    n_0 = n_e[2]
+
+    for (i, n) in enumerate(n_e)
+        phi[i] = phi_0 + T_e * log(n / n_0)
+    end
+
+    for i in 2:length(E)-1
+        # i -> left edge of cell i
+        iL, iR = i-1, i
+        z_L = grid.cell_centers[iL]
+        z_R = grid.cell_centers[iR]
+        E[i] = -(phi[iR] - phi[iL]) / (z_R - z_L)
+    end
+
+    return E, phi
+end
+
 end

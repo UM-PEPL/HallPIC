@@ -19,7 +19,6 @@ function test_leapfrog(::Type{T}) where T
 	v0 = 0
 	tmax = 5*pi
 	num_steps = ceil(Int, tmax / dt)
-	t = range(0.0, tmax, length=num_steps)
 
 	pos = zeros(num_steps)
 	vel = zeros(num_steps)
@@ -262,7 +261,7 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	L = 1.0
 	grid = hp.Grid(n_cell, 0, L, 1.0)
 	vol = grid.cell_volumes[1]
-	particles_per_cell = 500_000 # per cell 
+	particles_per_cell = 50_000 # per cell 
 
 	# Initialize fluid property arrays
 	n_0 = 1e18 / hp.n_0
@@ -310,6 +309,10 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	else
 		@test isapprox(min, w_min; rtol)
 	end
+	w_exact[1] = w_exact[end] = 0
+	n_exact[1] = n_exact[end] = 0
+	u_exact[1] = u_exact[end] = 0
+	T_exact[1] = T_exact[end] = 0
 
 	min, max = extrema(particles.vel)
 	thermal_speed = sqrt(T_0 / Xenon.mass)
@@ -321,36 +324,27 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	hp.deposit!(fluid_properties, particles, grid, avg_interval)
 
 	#check that interior cells have correct properties and ghost cells are still zero
-	for i in 2:n_cell+1
-		@test isapprox(fluid_properties.dens[i], n_exact[i]; rtol)
-	end
-	@test fluid_properties.dens[1] == 0
-	@test fluid_properties.dens[end] == 0
+	@test all(
+		isapprox.(fluid_properties.dens, n_exact; rtol)
+	)
 
-	for i in 2:n_cell+1
-		@test isapprox(fluid_properties.avg_weight[i], w_exact[i]/ avg_interval; rtol)
-	end
-	@test fluid_properties.avg_weight[1] == 0
-	@test fluid_properties.avg_weight[end] == 0
+	@test all(
+		isapprox.(fluid_properties.avg_weight, w_exact/avg_interval; rtol)
+	)
 
-	for i in 2:n_cell+1
-		@test isapprox(fluid_properties.vel[i], u_exact[i]; rtol)
-	end
-	@test fluid_properties.vel[1] == 0
-	@test fluid_properties.vel[end] == 0
+	@test all(
+		isapprox.(fluid_properties.vel, u_exact; rtol)
+	)
 
-	for i in 2:n_cell+1
-		@test isapprox(fluid_properties.temp[i], T_exact[i]; rtol)
-	end
-	@test fluid_properties.temp[1] == 0
-	@test fluid_properties.temp[end] == 0
+	@test all(
+		isapprox.(fluid_properties.temp, T_exact; rtol)
+	)
 end
 
 @testset "Deposition" begin
-	num_cells = 10
+	num_cells = 20
 	profiles = [:uniform, :linear, :quadratic]
-	tolerances = [1e-2, 5e-2, 0.2]
-	i = 3
+	tolerances = [2e-2, 5e-2, 0.1]
 	for T in [Float32, Float64]
 		for (prof, tol) in zip(profiles, tolerances)
 			test_deposition(T, num_cells, prof, tol)

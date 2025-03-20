@@ -420,12 +420,14 @@ function test_reaction_step(::Type{T}) where T
 	ion_properties.dens .= base .* 1e16#1/m^3
 	ion_properties.vel .= base .* 5000
 	ion_properties.temp .= base .* 0.1 #eV
-	grid = hp.Grid(2, 0, 1, 3.14)
+	grid = hp.Grid(2, 0, 1, 1)
 	
 	neutrals = hp.initialize_particles(neutral_properties, grid, n_n)
 	ions = hp.initialize_particles(ion_properties, grid, n_n)
 
 	#deposit to grid 
+	hp.locate_particles!(neutrals, grid)
+	hp.locate_particles!(ions, grid)
 	neutral_properties = hp.deposit!(neutral_properties, neutrals, grid)
 	ion_properties = hp.deposit!(ion_properties, ions, grid) 
 

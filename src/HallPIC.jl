@@ -3,6 +3,7 @@ module HallPIC
 using DataInterpolations: DataInterpolations, LinearInterpolation
 using DocStringExtensions
 using Random: Random
+using DelimitedFiles 
 
 
 #===================================================
@@ -76,6 +77,7 @@ struct ParticleContainer{T<:AbstractFloat}
     vel::Vector{T}
     acc::Vector{T}
 	species::Species
+    n_d::Int32
 end
 
 function ParticleContainer{T}(N, species::Species) where T<:AbstractFloat
@@ -83,8 +85,9 @@ function ParticleContainer{T}(N, species::Species) where T<:AbstractFloat
 	pos = zeros(T, N)
 	vel = zeros(T, N)
 	acc = zeros(T, N)
+    n_d = 500#hard code for now, should be a simulation hyperparamter
 	return ParticleContainer{T}(
-		weight, pos, vel, acc, species 
+		weight, pos, vel, acc, species, n_d 
 	)
 end
 
@@ -356,6 +359,109 @@ function deposit(cell_centers, volumes, fluid_properties::SpeciesProperties{T}, 
 
     
     return fluid_properties
+end
+
+#======================================================
+Reactions definitions
+======================================================#
+
+struct ReactingSpecies
+    name::Symbol
+    coefficient::Int8 
+end
+struct Reaction{T<:AbstractFloat}
+    reactant::ReactingSpecies
+    products::Vector{ReactingSpecies}
+    threshold_energy::T
+    energies::Vector{T}
+    rate::Vector{T}
+    delta_n::Vector{T}
+
+end
+
+
+
+function reaction_reduction(grid::Grid, reaction::Reaction, electron_properties::SpeciesProperties, fluid_properties::SpeciesProperties, reactant::ParticleContainer,  dt)
+
+    #for each cell, calculate the delta n
+    n_cell = length(grid.cells)
+    for i=1:n_cell
+        #calculate the number of particles produced 
+        rate = reaction.rate[electron_properties.temp[i]]#need to fix this for a linear interpolation 
+        reaction.delta_n[i] = fluid_properties.dens[i] * electron_properties.dens[i] * rate * dt 
+        """
+        #add to the daughter products 
+        for p=1:n_products
+            products[p].delta_n[i] += delta_n * reaction.product_multiplier[p]
+        end
+        """
+    end
+
+    #now that we have the delta_n, adjust particle weights 
+    n_particles = length(reactant.pos)
+    for i=1:n_particles
+        #pull the index 
+        ic = reactant.inds[i]
+        s = sign(ic)
+        ic = abs(ic)
+        #count the first cell 
+        reactant.weight[i] -= reactant.weight[i] * (reaction.reactant.coefficient * reaction.delta_n[ic]/fluid_properties.dens[ic]) * abs(reactant.pos[i] - grid.cells.center[ic]) / grid.cells.width[ic]
+        #count the second cell 
+        reactant.weight[i] -= reactant.weight[i] * (reaction.reactant.coefficient * reaction.delta_n[ic+s]/fluid_properties.dens[ic+s]) * abs(reactant.pos[i] - grid.cells.center[ic+s]) / grid.cells.width[ic+s]
+    end
+
+    return reaction, reactant 
+end
+
+"""
+Note that the products vector should be sorted the same way as in the reaction structure 
+"""
+
+function daughter_particle_generation(grid::Grid, reaction::Reaction, reactant_properties::SpeciesProperties, product_properties::SpeciesProperties, products::Vector{ParticleContainer})
+
+
+
+    n_products = length(products)
+    for p = 1:n_products 
+        n_d = products[p].n_d#number of desired particles touching cell, hyperparamter from the simualtion
+        #for each cell, add particles
+        n_cell = length(grid.cells)
+        for i=1:n_cell
+            #determine the number of partices to generate
+            w_gen = product_properties.avg_weight[i] * ((sum(products[p].inds==i)+sum(products[p].inds==i-1)+sum(products[p].inds == -(i+1)))/n_d)#check for particles in the cell 
+            n_gen = Int32(reaction.products[p].coefficient * reaction.delta_n[i] / w_gen)
+            #update the generation weight slightly to consume the full delta_n 
+            w_gen = reaction.delta_n[i] / n_gen 
+
+            #generate the particles 
+            #position 
+            z_L = grid.cells[i].left_face.pos                
+            pos_buf = grid.cells[i].width * Random.rand(n_gen) + z_L 
+
+            #velocity 
+            v_th = sqrt(reactant_properties.temp[i] / product.species.gas.mass)
+            vel_buf = Random.randn(vel_buf) * v_th + reactant_properties.vel[i]
+
+            #weight 
+            weight_buf = w_gen.*ones(n_gen)
+                
+            #actual generation 
+            add_particles!(product, pos_buf, vel_buf, weight_buf)
+        end
+    end 
+
+    return products
+end 
+
+function read_reaction_rates(filepath)
+
+    energy, values = open(filepath) do file 
+        energy = parse(Float64, strip(split(readline(file), ':')[2]))
+        values = readdlm(file, skipstart = 1)
+        energy, values 
+    end
+
+    return energy, values[:,1], values[:,2]
 end
 
 end

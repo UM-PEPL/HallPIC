@@ -8,8 +8,10 @@ DataInterpolations = "82cc6244-b520-54b8-b5a6-8a565e85f1d0"
 DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 StructArrays = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
+DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 
 [compat]
+DelimitedFiles = "1"
 DataInterpolations = "7.2.0"
 DocStringExtensions = "0.9.3"
 Documenter = "1.8.0"

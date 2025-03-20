@@ -203,9 +203,7 @@ end
 end
 
 
-function test_initial_deposition(::Type{T}) where T
-	#initialize species 
-	xenon = hp.Gas(name=:Xe, mass=131.293)
+function test_initial_deposition(_::Type{T}) where T
 
 	#define the cell properties
 	n_cell = 4
@@ -213,7 +211,7 @@ function test_initial_deposition(::Type{T}) where T
 
 
 	#seed properties/initialize cell arrays 
-	neutral_properties = hp.SpeciesProperties{Float64}(n_cell, xenon(0))
+	neutral_properties = hp.SpeciesProperties{Float64}(n_cell, Xenon(0))
 	base = ones(n_cell)
 	neutral_properties.dens .= base .* 1e18#1/m^3
 	neutral_properties.vel .= base .* 300
@@ -278,4 +276,101 @@ end
 	@test all(cell.volume ≈ dz * area for cell in grid.cells)
 	@test all(grid.cells[i].left_face == grid.faces[i] for i in eachindex(grid.cells))
 	@test all(grid.cells[i].right_face == grid.faces[i+1] for i in eachindex(grid.cells))
+end
+
+function test_read_reaction_table()
+	#load the reaction 
+	filepath = "../reactions/ionization_Xe_Xe+.dat"
+	threshold_energy, energy, rates = hp.read_reaction_rates(filepath)
+
+	#ensure that the values are correct 
+	@test threshold_energy ≈ 12.1298437
+
+	@test energy[1] ≈ 0.3878E-01
+	@test energy[100] ≈ 499.5
+
+	@test rates[1] ≈ 0.000
+	@test rates[100] ≈ 0.3526E-12
+
+end
+
+
+function test_initialize_reaction(::Type{T}) where T
+
+	#load the rate table 
+	filepath = "../reactions/ionization_Xe_Xe+.dat"
+	threshold_energy, energy, rates = hp.read_reaction_rates(filepath)
+
+	#define the species  
+	reactant = hp.ReactingSpecies(Xenon(0).gas.name, 1)
+	product = [hp.ReactingSpecies(Xenon(1).gas.name, 1)]
+
+	#initialize the struct 
+	Xe_ionization = hp.Reaction{T}(reactant, product, threshold_energy, energy, rates, [0.0, 0.0, 0.0, 0.0])
+
+	#actually test 
+	@test Xe_ionization.reactant == reactant
+	@test Xe_ionization.products == product 
+	@test Xe_ionization.threshold_energy ≈ threshold_energy
+	@test Xe_ionization.energies ≈ energy 
+	@test Xe_ionization.rate ≈ rates 
+	@test Xe_ionization.delta_n ≈ zeros(4) 
+
+
+end
+
+
+function test_reaction_step(::Type{T}) where T
+
+	#load the rate table 
+	filepath = "../reactions/ionization_Xe_Xe+.dat"
+	threshold_energy, energy, rates = hp.read_reaction_rates(filepath)
+
+	#define the species  
+	reactant = hp.ReactingSpecies(Xenon(0).gas.name, 1)
+	product = [hp.ReactingSpecies(Xenon(1).gas.name, 1)]
+
+	#initialize the reaction struct 
+	Xe_ionization = hp.Reaction{T}(reactant, product, threshold_energy, energy, rates, [0.0, 0.0, 0.0, 0.0])
+
+	#seed properties/initialize cell arrays 
+	n_cell = 2 
+	neutral_properties = hp.SpeciesProperties{Float64}(n_cell+2, Xenon(0))
+	ion_properties = hp.SpeciesProperties{Float64}(n_cell+2, Xenon(1))
+	base = ones(n_cell+2)
+	neutral_properties.dens .= base .* 1e18#1/m^3
+	neutral_properties.vel .= base .* 300
+	neutral_properties.temp .= base .* (500 / 11604) #eV
+	ion_properties.dens .= base .* 1e16#1/m^3
+	ion_properties.vel .= base .* 5000
+	ion_properties.temp .= base .* 0.1 #eV
+	grid = hp.Grid(2, 0, 1, 3.14, hp.OpenBoundary(), hp.OpenBoundary())
+	x = 0:(1/n_cell):1
+	x_c = (x[2:end] + x[1:end-1]) / 2
+	dx = x[2:end] - x[1:end-1]
+
+	
+	neutrals = hp.initialize_particles(neutral_properties, grid.cells[:].left_face, grid.cells.width, n_n)
+	ions = hp.initialize_particles(ion_properties, grid.cells.left_face, grid.cells.width, n_n)
+
+	#deposit to grid 
+	neutral_properties = hp.deposit(grid.cells.center, grid.cells.width, neutral_properties, neutrals)
+	ion_properties = hp.deposit(grid.cells.center, grid.cells.width, ion_properties, ions)
+
+	#initialization for reaction properties 
+
+
+	#reduce weights 
+
+	#add particles 
+end
+
+
+
+@testset "Reactions" begin
+	test_read_reaction_table()
+	for T in [Float32, Float64]
+		test_initialize_reaction(T)
+		test_reaction_step(T)
+	end
 end

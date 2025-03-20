@@ -358,24 +358,23 @@ end
 	n_e_exact = sum(sp.charge * dens for (sp, dens) in zip(species, densities))
 	n_i_exact = sum(dens for (sp, dens) in zip(species, densities) if sp.charge != 0)
 	avg_Z_exact = n_e_exact / n_i_exact
-	@show avg_Z_exact
 
-	num_cells=1
+	num_cells=10
 
-	T = Float32
+	for T in [Float32, Float64]
+		fluid_containers = [
+			hp.SpeciesProperties{T}(num_cells, sp) for sp in species
+		]
 
-	fluid_containers = [
-		hp.SpeciesProperties{T}(num_cells, sp) for sp in species
-	]
+		for (fluid, dens) in zip(fluid_containers, densities)
+			fluid.dens .= dens
+		end
 
-	for (fluid, dens) in zip(fluid_containers, densities)
-		fluid.dens .= dens
+		n_e = zeros(T, num_cells)
+		avg_Z = zeros(T, num_cells)
+		hp.calc_electron_density_and_avg_charge!(n_e, avg_Z, fluid_containers)
+
+		@test all(n_e .== T(n_e_exact))
+		@test all(avg_Z .== T(avg_Z_exact))
 	end
-
-	n_e = zeros(T, num_cells)
-	avg_Z = zeros(T, num_cells)
-	hp.calc_electron_density_and_avg_charge!(n_e, avg_Z, fluid_containers)
-
-	@test all(n_e .== T(n_e_exact))
-	@test all(avg_Z .== T(avg_Z_exact))
 end

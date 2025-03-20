@@ -441,9 +441,8 @@ end
 
 function reaction_reduction(grid::Grid, reaction::Reaction, electron_properties::SpeciesProperties, fluid_properties::SpeciesProperties, reactant::ParticleContainer,  dt)
 
-    #for each cell, calculate the delta n
-    n_cell = length(grid.cells)
-    for i=1:n_cell
+    #for each (non-ghost) cell, calculate the delta n
+    for i in 2:length(grid.cells)-1
         #calculate the number of particles produced 
         rate = reaction.rate[electron_properties.temp[i]]#need to fix this for a linear interpolation 
         reaction.delta_n[i] = fluid_properties.dens[i] * electron_properties.dens[i] * rate * dt 
@@ -456,8 +455,7 @@ function reaction_reduction(grid::Grid, reaction::Reaction, electron_properties:
     end
 
     #now that we have the delta_n, adjust particle weights 
-    n_particles = length(reactant.pos)
-    for i=1:n_particles
+    for i in 2:length(reactant.pos)-1
         #pull the index 
         ic = reactant.inds[i]
         s = sign(ic)
@@ -479,8 +477,8 @@ function daughter_particle_generation(grid::Grid, reaction::Reaction, reactant_p
 
 
 
-    n_products = length(products)
-    for p = 1:n_products 
+    #for each product 
+    for p in 1:length(products) 
         n_d = products[p].n_d#number of desired particles touching cell, hyperparamter from the simualtion
         #for each cell, add particles
         n_cell = length(grid.cells)

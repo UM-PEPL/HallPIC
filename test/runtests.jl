@@ -340,7 +340,6 @@ end
 	num_cells = 20
 	profiles = [:uniform, :linear, :quadratic]
 	tolerances = [2e-2, 5e-2, 0.1]
-	i = 3
 	for T in [Float32, Float64]
 		for (prof, tol) in zip(profiles, tolerances)
 			test_deposition(T, num_cells, prof, tol)

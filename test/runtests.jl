@@ -214,7 +214,6 @@ end
 
 	@test length(grid.cell_centers) == N+2
 	@test length(grid.face_centers) == N+3
-	@show grid.face_centers
 	@test grid.left_boundary == left_boundary
 	@test grid.right_boundary == right_boundary
 	dz = (x1 - x0) / N
@@ -249,60 +248,110 @@ end
 	@test pc.inds[7] == N+1
 end
 
-function test_initial_deposition(_::Type{T}) where T
+function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) where T
+	# initialize species 
+	xenon = hp.Gas(name=:Xe, mass=131.293)
+	species = xenon(0)
 
-	#define the cell properties
-	n_cell = 4
-	n_n = 50000#per cell 
+	# define the cell properties
+	L = 1.0
+	grid = hp.Grid(n_cell, 0, L, 1.0)
+	vol = grid.cell_volumes[1]
+	particles_per_cell = 500_000 # per cell 
 
+	# Initialize fluid property arrays
+	n_0 = 1e18 / hp.n_0
+	u_0 = 3.0 
+	T_0 = 50.0
+	w_0 = n_0 / particles_per_cell * vol 
+	avg_interval = 10
 
-	#seed properties/initialize cell arrays 
-	neutral_properties = hp.SpeciesProperties{Float64}(n_cell, Xenon(0))
-	base = ones(n_cell)
-	neutral_properties.dens .= base .* 1e18#1/m^3
-	neutral_properties.vel .= base .* 300
-	neutral_properties.temp .= base .* (500 / 11604) #eV
-	grid = hp.Grid(2, 0, 1, 1)
+	uniform(x) = 1
+	linear(x) = 0.5 * (1+x/L)
+	quadratic(x) = 1 - 2 * (x/L - 0.5)^2
 
-	neutrals = hp.initialize_particles(neutral_properties, grid, n_n)
+	fluid_properties = hp.SpeciesProperties{Float64}(n_cell+2, species)
+	prof_z = if profile == :linear
+		linear.(grid.cell_centers)
+	elseif profile == :quadratic
+		quadratic.(grid.cell_centers)
+	else
+		uniform.(grid.cell_centers)
+	end
+	@. fluid_properties.dens = prof_z * n_0
+	@. fluid_properties.vel = prof_z * u_0 
+	@. fluid_properties.temp = prof_z * T_0 
+	fluid_properties.avg_weight .= 0.0
 
-	#check that particles are in bounds and limits are correct
-	@test size(neutrals.pos)[1] == n_cell * n_n
-	min, max = extrema(neutrals.pos)
-	@test max <= 1.5
-	@test min >= -0.5
+	n_exact = copy(fluid_properties.dens)
+	u_exact = copy(fluid_properties.vel)
+	T_exact = copy(fluid_properties.temp)
+	w_exact = n_exact / particles_per_cell * vol
 
-	min, max = extrema(neutrals.weight)
-	@test max ≈ 1e13
-	@test min ≈ 1e13
+	# Create particles from fluid properties
+	particles = hp.initialize_particles(fluid_properties, grid, particles_per_cell)
 
-	min, max = extrema(neutrals.vel)
-	thermal_speed = sqrt(2 * hp.q_e * (500 / 11604) / (neutrals.species.gas.mass * hp.m_0))
-	@test max <= 300 + 10 * thermal_speed
-	@test min >= 300 - 10 * thermal_speed
+	# check that particles are in bounds and limits are correct
+	@test size(particles.pos)[1] == n_cell * particles_per_cell
+	min, max = extrema(particles.pos)
+	@test max <= L
+	@test min >= 0
 
-	
-	#deposit to the cells 
-	new_neutral_properties = hp.deposit(neutral_properties, neutrals, grid)
+	min, max = extrema(particles.weight)
+	w_min = 0.5 * (w_exact[1] + w_exact[2])
+	@test isapprox(max, w_0; rtol)
+	if profile == :uniform
+		@test isapprox(min, w_0; rtol)
+	else
+		@test isapprox(min, w_min; rtol)
+	end
 
-	#check that interior cells reproduce
-	@test isapprox(new_neutral_properties.dens[2], neutral_properties.dens[2]; rtol = 0.01)
-	@test isapprox(new_neutral_properties.vel[2], neutral_properties.vel[2]; rtol = 0.01)
-	@test isapprox(new_neutral_properties.temp[2], neutral_properties.temp[2]; rtol = 0.01)
+	min, max = extrema(particles.vel)
+	thermal_speed = sqrt(T_0 / Xenon.mass)
+	@test max <= u_0 + 8 * thermal_speed
+	@test min >= u_0 - 8 * thermal_speed
 
-	@test isapprox(new_neutral_properties.dens[3], neutral_properties.dens[3]; rtol = 0.01)
-	@test isapprox(new_neutral_properties.vel[3], neutral_properties.vel[3]; rtol = 0.01)
-	@test isapprox(new_neutral_properties.temp[3], neutral_properties.temp[3]; rtol = 0.01)
+	# deposit to the cells 
+	hp.locate_particles!(particles, grid)
+	hp.deposit!(fluid_properties, particles, grid, avg_interval)
 
+	#check that interior cells have correct properties and ghost cells are still zero
+	for i in 2:n_cell+1
+		@test isapprox(fluid_properties.dens[i], n_exact[i]; rtol)
+	end
+	@test fluid_properties.dens[1] == 0
+	@test fluid_properties.dens[end] == 0
+
+	for i in 2:n_cell+1
+		@test isapprox(fluid_properties.avg_weight[i], w_exact[i]/ avg_interval; rtol)
+	end
+	@test fluid_properties.avg_weight[1] == 0
+	@test fluid_properties.avg_weight[end] == 0
+
+	for i in 2:n_cell+1
+		@test isapprox(fluid_properties.vel[i], u_exact[i]; rtol)
+	end
+	@test fluid_properties.vel[1] == 0
+	@test fluid_properties.vel[end] == 0
+
+	for i in 2:n_cell+1
+		@test isapprox(fluid_properties.temp[i], T_exact[i]; rtol)
+	end
+	@test fluid_properties.temp[1] == 0
+	@test fluid_properties.temp[end] == 0
 end
 
-
-@testset "Initial Deposition" begin
+@testset "Deposition" begin
+	num_cells = 10
+	profiles = [:uniform, :linear, :quadratic]
+	tolerances = [1e-2, 5e-2, 0.2]
+	i = 3
 	for T in [Float32, Float64]
-		test_initial_deposition(T)
+		for (prof, tol) in zip(profiles, tolerances)
+			test_deposition(T, num_cells, prof, tol)
+		end
 	end
 end
-
 
 function test_read_reaction_table()
 	#load the reaction 

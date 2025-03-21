@@ -345,7 +345,6 @@ end
 	num_cells = 10
 	profiles = [:uniform, :linear, :quadratic]
 	tolerances = [1e-2, 5e-2, 0.2]
-	i = 3
 	for T in [Float32, Float64]
 		for (prof, tol) in zip(profiles, tolerances)
 			test_deposition(T, num_cells, prof, tol)
@@ -465,43 +464,48 @@ function test_initialize_reaction(::Type{T}) where T
 end
 
 
-function test_reaction_step(::Type{T}) where T
+function test_reaction_step(::Type{T}, rtol=0.01) where T
+	xenon = hp.Gas(name=:Xe, mass=131.293)
 
 	#first set up the plasma 
 	#seed properties/initialize cell arrays 
-	n_cell = 2 
+	n_cell = 10 
 	n_n = 500
-	neutral_properties = hp.SpeciesProperties{T}(n_cell+2, Xenon(0))
-	ion_properties = hp.SpeciesProperties{T}(n_cell+2, Xenon(1))
-	base = ones(n_cell+2)
-	neutral_properties.dens .= base .* 1e18#1/m^3
-	neutral_properties.vel .= base .* 300
-	neutral_properties.temp .= base .* (500 / 11604) #eV
-	ion_properties.dens .= base .* 1e16#1/m^3
-	ion_properties.vel .= base .* 5000
-	ion_properties.temp .= base .* 0.1 #eV
-	grid = hp.Grid(2, 0, 1, 1)
+	neutral_properties = hp.SpeciesProperties{T}(n_cell+2, xenon(0))
+	ion_properties = hp.SpeciesProperties{T}(n_cell+2, xenon(1))
+	neutral_properties.dens .= 1e18 / hp.n_0#1/m^3
+	neutral_properties.vel .= 300
+	neutral_properties.temp .= (500 / 11604) #eV
+	neutral_properties.avg_weight .= 0
+	ion_properties.dens .=  1e16 / hp.n_0#1/m^3
+	ion_properties.vel .= 5000
+	ion_properties.temp .=  0.1 #eV
+	ion_properties.avg_weight .= 0
+	grid = hp.Grid(n_cell, 0, 1.0, 1.0)
 	
 	neutrals = hp.initialize_particles(neutral_properties, grid, n_n)
 	ions = hp.initialize_particles(ion_properties, grid, n_n)
+	n_ions = length(ions.pos)
 
 	#deposit to grid 
 	hp.locate_particles!(neutrals, grid)
 	hp.locate_particles!(ions, grid)
-	neutral_properties = hp.deposit!(neutral_properties, neutrals, grid)
-	ion_properties = hp.deposit!(ion_properties, ions, grid) 
+	hp.deposit!(neutral_properties, neutrals, grid)
+	hp.deposit!(ion_properties, ions, grid) 
 
+	old_neutral_density = copy(neutral_properties.dens)
+	old_weights = copy(neutrals.weight)
 	#now can initialization for reaction properties 
 	#load the rate table 
 	filepath = "../reactions/ionization_Xe_Xe+.dat"
 	threshold_energy, energy, rates = hp.read_reaction_rates(filepath)
 
 	#define the species
-	reactant = hp.ReactingSpecies(Xenon(0).gas.name, 1)
-	product = [hp.ReactingSpecies(Xenon(1).gas.name, 1)]
+	reactant = hp.ReactingSpecies(xenon(0).gas.name, 1)
+	product = [hp.ReactingSpecies(xenon(1).gas.name, 1)]
 
 	#initialize the reaction struct 
-	Xe_ionization = hp.Reaction{T}(reactant, product, threshold_energy, energy, rates, [0.0, 0.0, 0.0, 0.0])
+	xe_ionization = hp.Reaction{T}(reactant, product, threshold_energy, energy, rates, zeros(n_cell+2))
 
 	#initialize some electron properties
 	electron = hp.Gas(name=:e, mass=0.00054858)
@@ -511,11 +515,35 @@ function test_reaction_step(::Type{T}) where T
 	
 	#reduce weights 
 	dt = 1e-9
-	Xe_ionization, neutrals = hp.reaction_reduction(grid, Xe_ionization, electron_properties, neutral_properties, neutrals, dt)
+	xe_ionization, neutrals = hp.reaction_reduction(grid, xe_ionization, electron_properties, neutral_properties, neutrals, dt) 
+
+	#check that number is conserved 
+	hp.deposit!(neutral_properties, neutrals, grid)
+	rate = xe_ionization.rate[3] - ((xe_ionization.rate[3]-xe_ionization.rate[2]) / (xe_ionization.energies[3] - xe_ionization.energies[2])) * (xe_ionization.energies[3] - 10)
+	for i in 2:n_cell+1
+		delta_n = dt * electron_properties.dens[i] * old_neutral_density[i] * rate * hp.n_0
+		@test xe_ionization.delta_n[i] ≈ delta_n 
+		@test isapprox(neutral_properties.dens[i], old_neutral_density[i] - delta_n; rtol)
+	end
+	#check that weights are reduced as expected 
+	for i in 1:length(neutrals.pos)
+		@test old_weights[i] >= neutrals.weight[i] 
+	end
 
 	#add particles 
-	ions = hp.daughter_particle_generation(grid, Xe_ionization, neutral_properties, ion_properties, [ions])
+	ions = hp.daughter_particle_generation(grid, xe_ionization, neutral_properties, ion_properties, [ions])[1]
 
+	#check that number is conserved 
+	old_density = copy(ion_properties.dens)
+	hp.locate_particles!(ions, grid)
+	hp.deposit!(ion_properties, ions, grid) 
+	for i in 2:n_cell+1
+		delta_n = dt * electron_properties.dens[i] * old_neutral_density[i] * rate * hp.n_0
+		@test isapprox(ion_properties.dens[i], old_density[i] + delta_n; rtol)
+	end
+
+	#final check that the number of ions has expanded 
+	@test length(ions.pos) > n_ions 
 end
 
 

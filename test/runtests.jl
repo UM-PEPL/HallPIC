@@ -217,6 +217,7 @@ end
 	@test grid.left_boundary == left_boundary
 	@test grid.right_boundary == right_boundary
 	dz = (x1 - x0) / N
+	@test grid.dz ≈ dz  
 	@test all(volume ≈ dz * area for volume in grid.cell_volumes)
 	@test grid.face_centers[end-1] - grid.face_centers[2] == (x1 - x0)
 end

@@ -263,6 +263,7 @@ end
 const HeavySpeciesBoundary = Union{OpenBoundary, WallBoundary}
 
 struct Grid
+    dz::Float64
     cell_centers::Vector{Float64}
     cell_volumes::Vector{Float64}
     face_centers::Vector{Float64}
@@ -287,7 +288,7 @@ function Grid(num_cells::Integer, left, right, area, left_boundary = OpenBoundar
 
     end
 
-    return Grid(cell_centers, cell_volumes, face_centers, face_areas, left_boundary, right_boundary)
+    return Grid(dz, cell_centers, cell_volumes, face_centers, face_areas, left_boundary, right_boundary)
 end
 
 """
@@ -333,8 +334,7 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
         inv_vol_c = 1 / grid.cell_volumes[ic]
         inv_vol_s = 1 / grid.cell_volumes[ic+s]
         z_cell = grid.cell_centers[ic]
-        dz = grid.face_centers[ic+1] - grid.face_centers[ic]
-        t = abs((z_part - z_cell) / dz)
+        t = abs((z_part - z_cell) / grid.dz)
 
         # Particle velocity and weight
         up = particles.vel[ip]
@@ -391,8 +391,7 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
         inv_vol_c = 1.0 / grid.cell_volumes[ic]
         inv_vol_s = 1.0 / grid.cell_volumes[ic+s]
         z_cell = grid.cell_centers[ic]
-        dz = grid.face_centers[ic+1] - grid.face_centers[ic]
-        t = abs((z_part - z_cell) / dz)
+        t = abs((z_part - z_cell) / grid.dz)
 
         # Particle velocity and weight
         up = particles.vel[ip]
@@ -488,7 +487,7 @@ function reaction_reduction(grid::Grid, reaction::Reaction{T}, electron_properti
         #to maintain the normalization, the two densities need to be multiplied by n_0 and the entire addition divided by n_0, results in a net multiplication of n_0
         reaction.delta_n[i] = fluid_properties.dens[i] * electron_properties.dens[i] * rate * dt * n_0
     end
-    dz = grid.face_centers[2:end] - grid.face_centers[1:end-1]
+
     #now that we have the delta_n, adjust particle weights 
     for i in 2:length(reactant.pos)-1
         #pull the index 
@@ -502,9 +501,9 @@ function reaction_reduction(grid::Grid, reaction::Reaction{T}, electron_properti
         end
 
         #count the first cell 
-        reactant.weight[i] -= reactant.weight[i] * (reaction.reactant.coefficient * reaction.delta_n[ic]/fluid_properties.dens[ic]) * abs(reactant.pos[i] - grid.cell_centers[ic]) / dz[ic]
+        reactant.weight[i] -= reactant.weight[i] * (reaction.reactant.coefficient * reaction.delta_n[ic]/fluid_properties.dens[ic]) * abs(reactant.pos[i] - grid.cell_centers[ic]) / grid.dz
         #count the second cell 
-        reactant.weight[i] -= reactant.weight[i] * (reaction.reactant.coefficient * reaction.delta_n[ic+s]/fluid_properties.dens[ic+s]) * abs(reactant.pos[i] - grid.cell_centers[ic+s]) / dz[ic+s]
+        reactant.weight[i] -= reactant.weight[i] * (reaction.reactant.coefficient * reaction.delta_n[ic+s]/fluid_properties.dens[ic+s]) * abs(reactant.pos[i] - grid.cell_centers[ic+s]) / grid.dz
     end
 
     return reaction, reactant 

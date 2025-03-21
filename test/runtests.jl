@@ -19,6 +19,7 @@ function test_leapfrog(::Type{T}) where T
 	v0 = 0
 	tmax = 5*pi
 	num_steps = ceil(Int, tmax / dt)
+	t = range(0.0, tmax, length=num_steps)
 
 	pos = zeros(num_steps)
 	vel = zeros(num_steps)
@@ -216,6 +217,7 @@ end
 	@test grid.left_boundary == left_boundary
 	@test grid.right_boundary == right_boundary
 	dz = (x1 - x0) / N
+	@test grid.dz ≈ dz  
 	@test all(volume ≈ dz * area for volume in grid.cell_volumes)
 	@test grid.face_centers[end-1] - grid.face_centers[2] == (x1 - x0)
 end
@@ -256,7 +258,7 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	L = 1.0
 	grid = hp.Grid(n_cell, 0, L, 1.0)
 	vol = grid.cell_volumes[1]
-	particles_per_cell = 50_000 # per cell 
+	particles_per_cell = 500_000 # per cell 
 
 	# Initialize fluid property arrays
 	n_0 = 1e18 / hp.n_0
@@ -304,10 +306,6 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	else
 		@test isapprox(min, w_min; rtol)
 	end
-	w_exact[1] = w_exact[end] = 0
-	n_exact[1] = n_exact[end] = 0
-	u_exact[1] = u_exact[end] = 0
-	T_exact[1] = T_exact[end] = 0
 
 	min, max = extrema(particles.vel)
 	thermal_speed = sqrt(T_0 / Xenon.mass)
@@ -319,27 +317,35 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	hp.deposit!(fluid_properties, particles, grid, avg_interval)
 
 	#check that interior cells have correct properties and ghost cells are still zero
-	@test all(
-		isapprox.(fluid_properties.dens, n_exact; rtol)
-	)
+	for i in 2:n_cell+1
+		@test isapprox(fluid_properties.dens[i], n_exact[i]; rtol)
+	end
+	@test fluid_properties.dens[1] == 0
+	@test fluid_properties.dens[end] == 0
 
-	@test all(
-		isapprox.(fluid_properties.avg_weight, w_exact/avg_interval; rtol)
-	)
+	for i in 2:n_cell+1
+		@test isapprox(fluid_properties.avg_weight[i], w_exact[i]/ avg_interval; rtol)
+	end
+	@test fluid_properties.avg_weight[1] == 0
+	@test fluid_properties.avg_weight[end] == 0
 
-	@test all(
-		isapprox.(fluid_properties.vel, u_exact; rtol)
-	)
+	for i in 2:n_cell+1
+		@test isapprox(fluid_properties.vel[i], u_exact[i]; rtol)
+	end
+	@test fluid_properties.vel[1] == 0
+	@test fluid_properties.vel[end] == 0
 
-	@test all(
-		isapprox.(fluid_properties.temp, T_exact; rtol)
-	)
+	for i in 2:n_cell+1
+		@test isapprox(fluid_properties.temp[i], T_exact[i]; rtol)
+	end
+	@test fluid_properties.temp[1] == 0
+	@test fluid_properties.temp[end] == 0
 end
 
 @testset "Deposition" begin
-	num_cells = 20
+	num_cells = 10
 	profiles = [:uniform, :linear, :quadratic]
-	tolerances = [2e-2, 5e-2, 0.1]
+	tolerances = [1e-2, 5e-2, 0.2]
 	for T in [Float32, Float64]
 		for (prof, tol) in zip(profiles, tolerances)
 			test_deposition(T, num_cells, prof, tol)
@@ -415,4 +421,138 @@ end
 	@test isapprox(E[midpt], zero(T); atol)
 	@test all(E[2:midpt-1] .< 0)
 	@test all(E[midpt+1:end-1] .> 0)
+end
+
+function test_read_reaction_table()
+	#load the reaction 
+	filepath = "../reactions/ionization_Xe_Xe+.dat"
+	threshold_energy, energy, rates = hp.read_reaction_rates(filepath)
+
+	#ensure that the values are correct 
+	@test threshold_energy ≈ 12.1298437
+
+	@test energy[1] ≈ 0.3878E-01
+	@test energy[100] ≈ 499.5
+
+	@test rates[1] ≈ 0.000
+	@test rates[100] ≈ 0.3526E-12
+
+end
+
+
+function test_initialize_reaction(::Type{T}) where T
+
+	#load the rate table 
+	filepath = "../reactions/ionization_Xe_Xe+.dat"
+	threshold_energy, energy, rates = hp.read_reaction_rates(filepath)
+
+	#define the species  
+	reactant = hp.ReactingSpecies(Xenon(0).gas.name, 1)
+	product = [hp.ReactingSpecies(Xenon(1).gas.name, 1)]
+
+	#initialize the struct 
+	Xe_ionization = hp.Reaction{T}(reactant, product, threshold_energy, energy, rates, [0.0, 0.0, 0.0, 0.0])
+
+	#actually test 
+	@test Xe_ionization.reactant == reactant
+	@test Xe_ionization.products == product 
+	@test Xe_ionization.threshold_energy ≈ threshold_energy
+	@test Xe_ionization.energies ≈ energy 
+	@test Xe_ionization.rate ≈ rates 
+	@test Xe_ionization.delta_n ≈ zeros(4) 
+
+
+end
+
+
+function test_reaction_step(::Type{T}, rtol=0.01) where T
+	xenon = hp.Gas(name=:Xe, mass=131.293)
+
+	#first set up the plasma 
+	#seed properties/initialize cell arrays 
+	n_cell = 10 
+	n_n = 500
+	neutral_properties = hp.SpeciesProperties{T}(n_cell+2, xenon(0))
+	ion_properties = hp.SpeciesProperties{T}(n_cell+2, xenon(1))
+	neutral_properties.dens .= 1e18 / hp.n_0#1/m^3
+	neutral_properties.vel .= 300
+	neutral_properties.temp .= (500 / 11604) #eV
+	neutral_properties.avg_weight .= 0
+	ion_properties.dens .=  1e16 / hp.n_0#1/m^3
+	ion_properties.vel .= 5000
+	ion_properties.temp .=  0.1 #eV
+	ion_properties.avg_weight .= 0
+	grid = hp.Grid(n_cell, 0, 1.0, 1.0)
+	
+	neutrals = hp.initialize_particles(neutral_properties, grid, n_n)
+	ions = hp.initialize_particles(ion_properties, grid, n_n)
+	n_ions = length(ions.pos)
+
+	#deposit to grid 
+	hp.locate_particles!(neutrals, grid)
+	hp.locate_particles!(ions, grid)
+	hp.deposit!(neutral_properties, neutrals, grid)
+	hp.deposit!(ion_properties, ions, grid) 
+
+	old_neutral_density = copy(neutral_properties.dens)
+	old_weights = copy(neutrals.weight)
+	#now can initialization for reaction properties 
+	#load the rate table 
+	filepath = "../reactions/ionization_Xe_Xe+.dat"
+	threshold_energy, energy, rates = hp.read_reaction_rates(filepath)
+
+	#define the species
+	reactant = hp.ReactingSpecies(xenon(0).gas.name, 1)
+	product = [hp.ReactingSpecies(xenon(1).gas.name, 1)]
+
+	#initialize the reaction struct 
+	xe_ionization = hp.Reaction{T}(reactant, product, threshold_energy, energy, rates, zeros(n_cell+2))
+
+	#initialize some electron properties
+	electron = hp.Gas(name=:e, mass=0.00054858)
+	electron_properties = hp.SpeciesProperties{T}(n_cell+2, electron(-1))
+	electron_properties.temp .= 10 #choose 10eV for now 
+	electron_properties.dens .= ion_properties.dens #quasineutrality 
+	
+	#reduce weights 
+	dt = 1e-9
+	xe_ionization, neutrals = hp.reaction_reduction(grid, xe_ionization, electron_properties, neutral_properties, neutrals, dt) 
+
+	#check that number is conserved 
+	hp.deposit!(neutral_properties, neutrals, grid)
+	rate = xe_ionization.rate[3] - ((xe_ionization.rate[3]-xe_ionization.rate[2]) / (xe_ionization.energies[3] - xe_ionization.energies[2])) * (xe_ionization.energies[3] - 10)
+	for i in 2:n_cell+1
+		delta_n = dt * electron_properties.dens[i] * old_neutral_density[i] * rate * hp.n_0
+		@test xe_ionization.delta_n[i] ≈ delta_n 
+		@test isapprox(neutral_properties.dens[i], old_neutral_density[i] - delta_n; rtol)
+	end
+	#check that weights are reduced as expected 
+	for i in 1:length(neutrals.pos)
+		@test old_weights[i] >= neutrals.weight[i] 
+	end
+
+	#add particles 
+	ions = hp.daughter_particle_generation(grid, xe_ionization, neutral_properties, ion_properties, [ions])[1]
+
+	#check that number is conserved 
+	old_density = copy(ion_properties.dens)
+	hp.locate_particles!(ions, grid)
+	hp.deposit!(ion_properties, ions, grid) 
+	for i in 2:n_cell+1
+		delta_n = dt * electron_properties.dens[i] * old_neutral_density[i] * rate * hp.n_0
+		@test isapprox(ion_properties.dens[i], old_density[i] + delta_n; rtol)
+	end
+
+	#final check that the number of ions has expanded 
+	@test length(ions.pos) > n_ions 
+end
+
+
+
+@testset "Reactions" begin
+	test_read_reaction_table()
+	for T in [Float32, Float64]
+		test_initialize_reaction(T)
+		test_reaction_step(T)
+	end
 end

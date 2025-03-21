@@ -385,6 +385,44 @@ end
 	end
 end
 
+@testset "Boltzmann relation 1" begin
+	num_cells = 10
+	L = 1.0
+	grid = hp.Grid(num_cells, 0, L, 1.0)
+
+	T = Float32
+
+	n_0 = 1e18 / hp.n_0
+	n_e = ones(T, num_cells+2) * n_0
+	T_e = 5.0
+
+	# check that uniform density causes phi == 0 and E == 0 everywhere
+	phi = zeros(T, num_cells+2)
+	E = zeros(T, num_cells+3)
+
+	hp.boltzmann_electric_field_and_potential!(E, phi, n_e, T_e, grid)
+
+	@test all(phi .== zero(T))
+	@test all(E .== zero(T))
+
+	# check that quadratic density causes large phi in middle and E pointing outward
+	quadratic(x) = 1 - 2 * (x/L - 0.5)^2
+	@. n_e = quadratic(grid.cell_centers) * n_0
+
+	hp.boltzmann_electric_field_and_potential!(E, phi, n_e, T_e, grid)
+	atol = 1e-12
+	@test isapprox(phi[2], zero(T); atol)
+	@test isapprox(phi[num_cells+1], zero(T); atol)
+	n_ratio = maximum(n_e) / n_e[2]
+	@test maximum(phi) ≈ T_e * log(n_ratio)
+	# note: this is true if we have an even number of cells,
+	# since an edge will lie exactly in the middle
+	midpt = length(E) ÷ 2 + 1
+	@test isapprox(E[midpt], zero(T); atol)
+	@test all(E[2:midpt-1] .< 0)
+	@test all(E[midpt+1:end-1] .> 0)
+end
+
 function test_read_reaction_table()
 	#load the reaction 
 	filepath = "../reactions/ionization_Xe_Xe+.dat"

@@ -456,21 +456,16 @@ end
 
 
 
-function reaction_reduction(grid::Grid, reaction::Reaction, electron_properties::SpeciesProperties, fluid_properties::SpeciesProperties, reactant::ParticleContainer,  dt)
+function reaction_reduction(grid::Grid, reaction::Reaction{T}, electron_properties::SpeciesProperties{T}, fluid_properties::SpeciesProperties{T}, reactant::ParticleContainer{T},  dt) where T
 
     #for each (non-ghost) cell, calculate the delta n
-    for i in 2:length(grid.cells)-1
-        #calculate the number of particles produced 
-        rate = reaction.rate[electron_properties.temp[i]]#need to fix this for a linear interpolation 
+    for i in 2:length(grid.cell_centers)-1
+        #calculate the number of particles produced
+        rate_idx = findfirst(electron_properties.temp[i] .<= reaction.energies)
+        rate = (reaction.rate[rate_idx] - reaction.rate[rate_idx-1]) / (reaction.energies[rate_idx] - reaction.energies[rate_idx-1])
         reaction.delta_n[i] = fluid_properties.dens[i] * electron_properties.dens[i] * rate * dt 
-        """
-        #add to the daughter products 
-        for p=1:n_products
-            products[p].delta_n[i] += delta_n * reaction.product_multiplier[p]
-        end
-        """
     end
-
+    dz = grid.face_centers[2:end] - grid.face_centers[1:end-1]
     #now that we have the delta_n, adjust particle weights 
     for i in 2:length(reactant.pos)-1
         #pull the index 
@@ -478,9 +473,9 @@ function reaction_reduction(grid::Grid, reaction::Reaction, electron_properties:
         s = sign(ic)
         ic = abs(ic)
         #count the first cell 
-        reactant.weight[i] -= reactant.weight[i] * (reaction.reactant.coefficient * reaction.delta_n[ic]/fluid_properties.dens[ic]) * abs(reactant.pos[i] - grid.cells.center[ic]) / grid.cells.width[ic]
+        reactant.weight[i] -= reactant.weight[i] * (reaction.reactant.coefficient * reaction.delta_n[ic]/fluid_properties.dens[ic]) * abs(reactant.pos[i] - grid.cell_centers[ic]) / dz[ic]
         #count the second cell 
-        reactant.weight[i] -= reactant.weight[i] * (reaction.reactant.coefficient * reaction.delta_n[ic+s]/fluid_properties.dens[ic+s]) * abs(reactant.pos[i] - grid.cells.center[ic+s]) / grid.cells.width[ic+s]
+        reactant.weight[i] -= reactant.weight[i] * (reaction.reactant.coefficient * reaction.delta_n[ic+s]/fluid_properties.dens[ic+s]) * abs(reactant.pos[i] - grid.cell_centers[ic+s]) / dz[ic+s]
     end
 
     return reaction, reactant 
@@ -490,36 +485,35 @@ end
 Note that the products vector should be sorted the same way as in the reaction structure 
 """
 
-function daughter_particle_generation(grid::Grid, reaction::Reaction, reactant_properties::SpeciesProperties, product_properties::SpeciesProperties, products::Vector{ParticleContainer})
+function daughter_particle_generation(grid::Grid, reaction::Reaction{T}, reactant_properties::SpeciesProperties{T}, product_properties::SpeciesProperties{T}, products::Vector{ParticleContainer{T}}) where T
 
 
-
+    dz = grid.face_centers[2:end] - grid.face_centers[1:end-1]
     #for each product 
     for p in 1:length(products) 
         n_d = products[p].n_d#number of desired particles touching cell, hyperparamter from the simualtion
-        #for each cell, add particles
-        n_cell = length(grid.cells)
-        for i=1:n_cell
+        #for each cell, add particles 
+        for i=2:length(grid.cell_centers)-1
             #determine the number of partices to generate
-            w_gen = product_properties.avg_weight[i] * ((sum(products[p].inds==i)+sum(products[p].inds==i-1)+sum(products[p].inds == -(i+1)))/n_d)#check for particles in the cell 
-            n_gen = Int32(reaction.products[p].coefficient * reaction.delta_n[i] / w_gen)
+            w_gen = product_properties.avg_weight[i] * ((sum(products[p].inds.==i)+sum(products[p].inds.==-i)+sum(products[p].inds.==i-1)+sum(products[p].inds .== -(i+1)))/n_d)#check for particles in the cell 
+            n_gen = Int32(floor(reaction.products[p].coefficient * reaction.delta_n[i] / w_gen))
             #update the generation weight slightly to consume the full delta_n 
             w_gen = reaction.delta_n[i] / n_gen 
 
             #generate the particles 
             #position 
-            z_L = grid.cells[i].left_face.pos                
-            pos_buf = grid.cells[i].width * Random.rand(n_gen) + z_L 
+            z_L = grid.face_centers[i]              
+            pos_buf = T.(dz[i] * Random.rand(n_gen) .+ z_L )
 
             #velocity 
-            v_th = sqrt(reactant_properties.temp[i] / product.species.gas.mass)
-            vel_buf = Random.randn(vel_buf) * v_th + reactant_properties.vel[i]
+            v_th = sqrt(reactant_properties.temp[i] / products[p].species.gas.mass)
+            vel_buf = T.(Random.randn(n_gen) * v_th .+ reactant_properties.vel[i])
 
             #weight 
-            weight_buf = w_gen.*ones(n_gen)
+            weight_buf = w_gen.*ones(T, n_gen)
                 
             #actual generation 
-            add_particles!(product, pos_buf, vel_buf, weight_buf)
+            add_particles!(products[p], pos_buf, vel_buf, weight_buf)
         end
     end 
 

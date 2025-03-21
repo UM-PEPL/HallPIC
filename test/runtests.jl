@@ -433,8 +433,8 @@ function test_reaction_step(::Type{T}) where T
 	#seed properties/initialize cell arrays 
 	n_cell = 2 
 	n_n = 500
-	neutral_properties = hp.SpeciesProperties{Float64}(n_cell+2, Xenon(0))
-	ion_properties = hp.SpeciesProperties{Float64}(n_cell+2, Xenon(1))
+	neutral_properties = hp.SpeciesProperties{T}(n_cell+2, Xenon(0))
+	ion_properties = hp.SpeciesProperties{T}(n_cell+2, Xenon(1))
 	base = ones(n_cell+2)
 	neutral_properties.dens .= base .* 1e18#1/m^3
 	neutral_properties.vel .= base .* 300
@@ -458,7 +458,7 @@ function test_reaction_step(::Type{T}) where T
 	filepath = "../reactions/ionization_Xe_Xe+.dat"
 	threshold_energy, energy, rates = hp.read_reaction_rates(filepath)
 
-	#define the species  
+	#define the species
 	reactant = hp.ReactingSpecies(Xenon(0).gas.name, 1)
 	product = [hp.ReactingSpecies(Xenon(1).gas.name, 1)]
 
@@ -467,14 +467,17 @@ function test_reaction_step(::Type{T}) where T
 
 	#initialize some electron properties
 	electron = hp.Gas(name=:e, mass=0.00054858)
-	electron_properties = hp.SpeciesProperties{Float64}(n_cell+2, electron(-1))
+	electron_properties = hp.SpeciesProperties{T}(n_cell+2, electron(-1))
 	electron_properties.temp .= 10 #choose 10eV for now 
 	electron_properties.dens .= ion_properties.dens #quasineutrality 
 	
-
 	#reduce weights 
+	dt = 1e-9
+	Xe_ionization, neutrals = hp.reaction_reduction(grid, Xe_ionization, electron_properties, neutral_properties, neutrals, dt)
 
 	#add particles 
+	ions = hp.daughter_particle_generation(grid, Xe_ionization, neutral_properties, ion_properties, [ions])
+
 end
 
 

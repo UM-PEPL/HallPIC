@@ -296,6 +296,13 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	@test max <= L
 	@test min >= 0
 
+	# verify that particle positions are sorted
+	@test issorted(particles.pos)
+
+	# verify that particles are evenly-spaced
+	dz = diff(particles.pos)
+	@test all(_dz ≈ dz[1] for _dz in dz)
+
 	min, max = extrema(particles.weight)
 	w_min = 0.5 * (w_exact[1] + w_exact[2])
 	@test isapprox(max, w_0; rtol)
@@ -304,10 +311,6 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	else
 		@test isapprox(min, w_min; rtol)
 	end
-	#w_exact[1] = w_exact[end] = 0
-	#n_exact[1] = n_exact[end] = 0
-	#u_exact[1] = u_exact[end] = 0
-	#T_exact[1] = T_exact[end] = 0
 
 	min, max = extrema(particles.vel)
 	thermal_speed = sqrt(T_0 / Xenon.mass)
@@ -353,7 +356,7 @@ end
 @testset "Deposition" begin
 	num_cells = 20
 	profiles = [:uniform, :linear, :quadratic]
-	tolerances = [2e-2, 5e-2, 0.1]
+	tolerances = [2e-2, 2e-2, 1e-1]
 	for T in [Float32, Float64]
 		for (prof, tol) in zip(profiles, tolerances)
 			test_deposition(T, num_cells, prof, tol)

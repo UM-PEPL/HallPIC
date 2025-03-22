@@ -277,7 +277,8 @@ The `remove_flagged_particles!` function can then be called to remove particles 
 """
 function flag_particles_in_cell!(pc::ParticleContainer{T}, cell_index) where T
     for (i, ic) in enumerate(pc.inds)
-        pc.weight[i] *= (abs(ic) != cell_index)
+        pred = abs(ic) != cell_index
+        pc.weight[i] *= pred
     end
 end
 
@@ -371,9 +372,11 @@ function initialize_particles(sp::SpeciesProperties{T}, grid, particles_per_cell
 		z_L = grid.face_centers[i]
 		z_R = grid.face_centers[i+1]
 		dz = z_R - z_L
+        dz_particle = dz / particles_per_cell
 
-		Random.rand!(pos_buf)
-		@. pos_buf = dz * pos_buf + z_L 
+        # Load particles in uniformly and evenly-spaced
+        # In addition to being smoother than random particles, it also causes the particles to be sorted by position.
+		pos_buf .= range(z_L + dz_particle/2, z_R - dz_particle/2, length=particles_per_cell)
 
 		Random.randn!(vel_buf)
 		@. vel_buf *= sqrt(T_itp(pos_buf) / pc.species.gas.mass)

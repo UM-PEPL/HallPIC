@@ -112,6 +112,7 @@ end
 
 @inline function swap!(v::AbstractArray, ind_1::Integer, ind_2::Integer)
     v[ind_1], v[ind_2] = v[ind_2], v[ind_1]
+    return v
 end
 
 """
@@ -144,7 +145,7 @@ Returns the index of the last `false` element.
 
 Requires that `eachindex`, `firstindex`, and `lastindex` are implemented for the given collection.
 """
-function partition!(v, pred, swap)
+function partition!(v, pred=getindex, swap=swap!)
     i = firstindex(v)
     j = lastindex(v)
     while i <= lastindex(v)
@@ -196,7 +197,7 @@ Add particles to a `ParticleContainer`.
 function add_particles!(pc::ParticleContainer{T}, x::Vector{T}, v::Vector{T}, w::Vector{T}) where T
 	# check that new arrays have same length
 	M = length(x)
-	N = length(pc.pos)
+	N = length(pc)
 	@assert M == length(v) && M == length(w)
 	# append position, velocity, weight to pc arrays
 	append!(pc.pos, x)
@@ -271,12 +272,12 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Delete particles in the given cell by setting their weight to zero.
-The `compact_particles!` function can then be called to remove particles with zero weight.
+Flag particles in the given cell for deletion by setting their weight to zero.
+The `remove_flagged_particles!` function can then be called to remove particles with zero weight.
 """
-function delete_particles_in_cell!(pc::ParticleContainer{T}, cell_index) where T
+function flag_particles_in_cell!(pc::ParticleContainer{T}, cell_index) where T
     for (i, ic) in enumerate(pc.inds)
-        pc.weights[i] *= (ic == cell_index)
+        pc.weight[i] *= (abs(ic) != cell_index)
     end
 end
 

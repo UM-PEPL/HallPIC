@@ -304,10 +304,10 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	else
 		@test isapprox(min, w_min; rtol)
 	end
-	w_exact[1] = w_exact[end] = 0
-	n_exact[1] = n_exact[end] = 0
-	u_exact[1] = u_exact[end] = 0
-	T_exact[1] = T_exact[end] = 0
+	#w_exact[1] = w_exact[end] = 0
+	#n_exact[1] = n_exact[end] = 0
+	#u_exact[1] = u_exact[end] = 0
+	#T_exact[1] = T_exact[end] = 0
 
 	min, max = extrema(particles.vel)
 	thermal_speed = sqrt(T_0 / Xenon.mass)
@@ -318,22 +318,36 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	hp.locate_particles!(particles, grid)
 	hp.deposit!(fluid_properties, particles, grid, avg_interval)
 
-	#check that interior cells have correct properties and ghost cells are still zero
+	# check that interior cells have correct properties and ghost cells are still zero
+	inds = (firstindex(n_exact)+1) : (lastindex(n_exact)-1)
 	@test all(
-		isapprox.(fluid_properties.dens, n_exact; rtol)
+		isapprox.(fluid_properties.dens[inds], n_exact[inds]; rtol)
 	)
 
 	@test all(
-		isapprox.(fluid_properties.avg_weight, w_exact/avg_interval; rtol)
+		isapprox.(fluid_properties.avg_weight[inds], w_exact[inds]/avg_interval; rtol)
 	)
 
 	@test all(
-		isapprox.(fluid_properties.vel, u_exact; rtol)
+		isapprox.(fluid_properties.vel[inds], u_exact[inds]; rtol)
 	)
 
 	@test all(
-		isapprox.(fluid_properties.temp, T_exact; rtol)
+		isapprox.(fluid_properties.temp[inds], T_exact[inds]; rtol)
 	)
+
+	# check ghost cell extrapolation
+	if fluid_properties.dens[2] > fluid_properties.dens[1]
+		@test fluid_properties.vel[2] < fluid_properties.vel[1]
+	else
+		@test fluid_properites.vel[2] >= fluid_properites.vel[1]
+	end
+
+	if fluid_properties.dens[end-1] > fluid_properties.dens[end]
+		@test fluid_properties.vel[end-1] < fluid_properties.vel[end]
+	else
+		@test fluid_properties.vel[end-1] >= fluid_properties.vel[end]
+	end
 end
 
 @testset "Deposition" begin

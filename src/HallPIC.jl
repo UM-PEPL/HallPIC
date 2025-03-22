@@ -367,21 +367,20 @@ function initialize_particles(sp::SpeciesProperties{T}, grid, particles_per_cell
     T_itp = LinearInterpolation(sp.temp, grid.cell_centers)
 
     for i in 2:length(grid.cell_centers) - 1
-        z = grid.cell_centers[i]
-        V = grid.cell_volumes[i]
 		z_L = grid.face_centers[i]
 		z_R = grid.face_centers[i+1]
 		dz = z_R - z_L
-        dz_particle = dz / particles_per_cell
+        dz_part = dz / particles_per_cell
 
         # Load particles in uniformly and evenly-spaced
         # In addition to being smoother than random particles, it also causes the particles to be sorted by position.
-		pos_buf .= range(z_L + dz_particle/2, z_R - dz_particle/2, length=particles_per_cell)
+		pos_buf .= range(z_L + dz_part/2, z_R - dz_part/2, length=particles_per_cell)
 
 		Random.randn!(vel_buf)
 		@. vel_buf *= sqrt(T_itp(pos_buf) / pc.species.gas.mass)
 		@. vel_buf = vel_buf + u_itp(pos_buf)
 
+        V = grid.cell_volumes[i]
 		@. weight_buf = n_itp(pos_buf) / particles_per_cell * V
 
 		add_particles!(pc, pos_buf, vel_buf, weight_buf)

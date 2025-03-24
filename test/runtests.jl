@@ -186,6 +186,7 @@ end
 			@test cell.vel == sp.vel[i] && cell.vel == sp[i].vel
 			@test cell.temp == sp.temp[i] && cell.temp == sp[i].temp
 			@test cell.avg_weight == sp.avg_weight[i] == sp[i].avg_weight
+			@test cell.N_particles == 0
 			@test cell == sp[i]
 		end
 		c = collect(sp)
@@ -283,6 +284,7 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	@. fluid_properties.vel = prof_z * u_0 
 	@. fluid_properties.temp = prof_z * T_0 
 	fluid_properties.avg_weight .= 0.0
+	fluid_properties.N_particles .= 0
 
 	n_exact = copy(fluid_properties.dens)
 	u_exact = copy(fluid_properties.vel)
@@ -323,8 +325,9 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	@test fluid_properties.dens[1] == 0
 	@test fluid_properties.dens[end] == 0
 
+	#add factor of 2 to account for the fact that each particle touches two cells 
 	for i in 2:n_cell+1
-		@test isapprox(fluid_properties.avg_weight[i], w_exact[i]/ avg_interval; rtol)
+		@test isapprox(fluid_properties.avg_weight[i], w_exact[i]/ (2*avg_interval); rtol)
 	end
 	@test fluid_properties.avg_weight[1] == 0
 	@test fluid_properties.avg_weight[end] == 0
@@ -340,6 +343,9 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	end
 	@test fluid_properties.temp[1] == 0
 	@test fluid_properties.temp[end] == 0
+
+	@test sum(fluid_properties.N_particles) == 2 * particles_per_cell * n_cell
+
 end
 
 @testset "Deposition" begin
@@ -426,16 +432,16 @@ end
 function test_read_reaction_table()
 	#load the reaction 
 	filepath = "../reactions/ionization_Xe_Xe+.dat"
-	threshold_energy, energy, rates = hp.read_reaction_rates(filepath)
+	threshold_energy, table = hp.read_reaction_rates(filepath)
 
 	#ensure that the values are correct 
 	@test threshold_energy ≈ 12.1298437
 
-	@test energy[1] ≈ 0.3878E-01
-	@test energy[100] ≈ 499.5
+	@test table.t[1] ≈ 0.3878E-01
+	@test table.t[100] ≈ 499.5
 
-	@test rates[1] ≈ 0.000
-	@test rates[100] ≈ 0.3526E-12
+	@test table.u[1] ≈ 0.000
+	@test table.u[100] ≈ 0.3526E-12*hp.n_0
 
 end
 
@@ -444,21 +450,21 @@ function test_initialize_reaction(::Type{T}) where T
 
 	#load the rate table 
 	filepath = "../reactions/ionization_Xe_Xe+.dat"
-	threshold_energy, energy, rates = hp.read_reaction_rates(filepath)
+	threshold_energy, table = hp.read_reaction_rates(filepath)
 
 	#define the species  
-	reactant = hp.ReactingSpecies(Xenon(0).gas.name, 1)
-	product = [hp.ReactingSpecies(Xenon(1).gas.name, 1)]
+	reactant = Xenon(0)
+	product = [Xenon(1)]
 
 	#initialize the struct 
-	Xe_ionization = hp.Reaction{T}(reactant, product, threshold_energy, energy, rates, [0.0, 0.0, 0.0, 0.0])
+	Xe_ionization = hp.Reaction{T}(reactant, product, [1,1], threshold_energy, table, [0.0, 0.0, 0.0, 0.0])
 
 	#actually test 
 	@test Xe_ionization.reactant == reactant
 	@test Xe_ionization.products == product 
+	@test Xe_ionization.coefficients == [1,1]
 	@test Xe_ionization.threshold_energy ≈ threshold_energy
-	@test Xe_ionization.energies ≈ energy 
-	@test Xe_ionization.rate ≈ rates 
+	@test Xe_ionization.rate_table == table
 	@test Xe_ionization.delta_n ≈ zeros(4) 
 
 
@@ -478,10 +484,12 @@ function test_reaction_step(::Type{T}, rtol=0.01) where T
 	neutral_properties.vel .= 300
 	neutral_properties.temp .= (500 / 11604) #eV
 	neutral_properties.avg_weight .= 0
+	neutral_properties.N_particles .= 0
 	ion_properties.dens .=  1e16 / hp.n_0#1/m^3
 	ion_properties.vel .= 5000
 	ion_properties.temp .=  0.1 #eV
 	ion_properties.avg_weight .= 0
+	ion_properties.N_particles .= 0
 	grid = hp.Grid(n_cell, 0, 1.0, 1.0)
 	
 	neutrals = hp.initialize_particles(neutral_properties, grid, n_n)
@@ -499,30 +507,31 @@ function test_reaction_step(::Type{T}, rtol=0.01) where T
 	#now can initialization for reaction properties 
 	#load the rate table 
 	filepath = "../reactions/ionization_Xe_Xe+.dat"
-	threshold_energy, energy, rates = hp.read_reaction_rates(filepath)
+	threshold_energy, table = hp.read_reaction_rates(filepath)
 
 	#define the species
-	reactant = hp.ReactingSpecies(xenon(0).gas.name, 1)
-	product = [hp.ReactingSpecies(xenon(1).gas.name, 1)]
+	reactant = xenon(0)
+	product = [xenon(1)]
+	
 
 	#initialize the reaction struct 
-	xe_ionization = hp.Reaction{T}(reactant, product, threshold_energy, energy, rates, zeros(n_cell+2))
+	xe_ionization = hp.Reaction{T}(reactant, product, [1,1], threshold_energy, table, zeros(n_cell+2))
 
 	#initialize some electron properties
 	electron = hp.Gas(name=:e, mass=0.00054858)
 	electron_properties = hp.SpeciesProperties{T}(n_cell+2, electron(-1))
 	electron_properties.temp .= 10 #choose 10eV for now 
 	electron_properties.dens .= ion_properties.dens #quasineutrality 
-	
+
 	#reduce weights 
 	dt = 1e-9
 	xe_ionization, neutrals = hp.reaction_reduction(grid, xe_ionization, electron_properties, neutral_properties, neutrals, dt) 
 
 	#check that number is conserved 
 	hp.deposit!(neutral_properties, neutrals, grid)
-	rate = xe_ionization.rate[3] - ((xe_ionization.rate[3]-xe_ionization.rate[2]) / (xe_ionization.energies[3] - xe_ionization.energies[2])) * (xe_ionization.energies[3] - 10)
+	rate = xe_ionization.rate_table(10)
 	for i in 2:n_cell+1
-		delta_n = dt * electron_properties.dens[i] * old_neutral_density[i] * rate * hp.n_0
+		delta_n = dt * electron_properties.dens[i] * old_neutral_density[i] * rate
 		@test xe_ionization.delta_n[i] ≈ delta_n 
 		@test isapprox(neutral_properties.dens[i], old_neutral_density[i] - delta_n; rtol)
 	end
@@ -532,19 +541,24 @@ function test_reaction_step(::Type{T}, rtol=0.01) where T
 	end
 
 	#add particles 
-	ions = hp.daughter_particle_generation(grid, xe_ionization, neutral_properties, ion_properties, [ions])[1]
+	ions = hp.generate_daughter_particles!([ions], [ion_properties],xe_ionization, neutral_properties, grid)[1]
 
+	
 	#check that number is conserved 
 	old_density = copy(ion_properties.dens)
 	hp.locate_particles!(ions, grid)
 	hp.deposit!(ion_properties, ions, grid) 
 	for i in 2:n_cell+1
-		delta_n = dt * electron_properties.dens[i] * old_neutral_density[i] * rate * hp.n_0
+		delta_n = dt * electron_properties.dens[i] * old_neutral_density[i] * rate
 		@test isapprox(ion_properties.dens[i], old_density[i] + delta_n; rtol)
 	end
 
 	#final check that the number of ions has expanded 
 	@test length(ions.pos) > n_ions 
+
+	#should add N2 and OH decomp for testing coefficients and multiple products 
+		
+
 end
 
 

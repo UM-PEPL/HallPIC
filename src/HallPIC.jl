@@ -440,6 +440,7 @@ end
 
 
 function find_cell_indices(cell_index, grid::Grid)
+
     # don't deposit into ghost cells
     if cell_index == -2 || cell_index == length(grid.cell_centers)-1
         s, ic = 0, abs(cell_index)
@@ -466,6 +467,7 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
 
     # loop over particles, deposit density and momentum density
     for (ip, z_part) in enumerate(particles.pos)
+
         # The cell index is positive if the particle is right of the cell center,
         # or negative if it is left of the cell center
         s, ic = find_cell_indices(particles.inds[ip], grid)
@@ -513,6 +515,7 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
 
     # Calculate energy density
     for (ip, z_part) in enumerate(particles.pos)
+
         # The cell index is positive if the particle is right of the cell center,
         # or negative if it is left of the cell center
         s, ic = find_cell_indices(particles.inds[ip], grid)
@@ -594,6 +597,7 @@ function calc_electron_density_and_avg_charge!(n_e::Vector{T}, avg_charge::Vecto
 end
 
 function boltzmann_electric_field_and_potential!(E, phi, n_e, T_e, grid)
+
     # note: E is stored on edges
     # V - V_0 = Te ln(n) / ln(n_0)
     # -dPhi/dz = E = Te d(ln(n))/dz
@@ -622,7 +626,7 @@ Reactions definitions
 struct Reaction{T<:AbstractFloat}
     reactant::Species
     products::Vector{Species}
-    coefficients::Vector{UInt8}#first index is reactant, others are products 
+    product_coefficients::Vector{UInt8}
     threshold_energy::T
     rate_table::LinearInterpolation
     delta_n::Vector{T}
@@ -631,31 +635,34 @@ end
 
 
 
-function reaction_reduction(grid::Grid, reaction::Reaction{T}, electron_properties::SpeciesProperties{T}, fluid_properties::SpeciesProperties{T}, reactant::ParticleContainer{T},  dt) where T
+function deplete_reactant!(reaction::Reaction{T}, reactant::ParticleContainer{T}, fluid_properties::SpeciesProperties{T}, grid::Grid, electron_properties::SpeciesProperties{T}, dt) where T
 
-    #for each (non-ghost) cell, calculate the delta n
+    # for each (non-ghost) cell, calculate the delta n
     for i in 2:length(grid.cell_centers)-1
-        #find the rate from a lookup table 
+
+        # find the rate from a lookup table 
         rate = reaction.rate_table(electron_properties.temp[i])
-        #calculate the number of particles produced
+        # calculate the number of particles produced
         reaction.delta_n[i] = fluid_properties.dens[i] * electron_properties.dens[i] * rate * dt
     end
 
-    #now that we have the delta_n, adjust particle weights 
+    # now that we have the delta_n, adjust particle weights 
     for i in 2:length(reactant.pos)-1
-        #pull the index 
+
+        # pull the index 
         s, ic = find_cell_indices(reactant.inds[i], grid)
 
-        #for each cell the particle touches  
+        # for each cell the particle touches  
         for ii in 0:1
-            #find the index 
+
+            # find the index 
             idx = ic + ii*s
-            #calculate the shape function for portion of particle that touches the cell 
-            shape = abs(reactant.pos[i] - grid.cell_centers[ic]) / grid.dz
-            #relative proportion of weight in the cell 
+            # calculate the shape function for portion of particle that touches the cell 
+            shape = abs(reactant.pos[i] - grid.cell_centers[idx]) / grid.dz
+            # relative proportion of weight in the cell 
             weight_proportion = reaction.delta_n[idx]/fluid_properties.dens[idx]
-            #reduce the weight 
-            reactant.weight[i] -= reactant.weight[i] * (reaction.coefficients[1] * weight_proportion) * shape
+            # reduce the weight 
+            reactant.weight[i] -= reactant.weight[i] * weight_proportion * shape
         end
         
     end
@@ -666,47 +673,47 @@ end
 """
 Note that the products vector should be sorted the same way as in the reaction structure 
 """
-
-function generate_daughter_particles!(products::Vector{ParticleContainer{T}}, product_properties::Vector{SpeciesProperties{T}},  reaction::Reaction{T}, reactant_properties::SpeciesProperties{T}, grid::Grid) where T
+function generate_products!(products::Vector{ParticleContainer{T}}, product_properties::Vector{SpeciesProperties{T}},  reaction::Reaction{T}, reactant_properties::SpeciesProperties{T}, grid::Grid) where T
 
     pos_buf = T[]
     vel_buf = T[]
     weight_buf = T[]
 
     dz = grid.face_centers[2:end] - grid.face_centers[1:end-1]
-    #for each product 
-    for p in 1:length(products) 
-        n_desired = products[p].n_d#number of desired particles touching cell, hyperparamter from the simualtion
-        #for each cell, add particles 
-        for i=2:length(grid.cell_centers)-1
-            #determine the number of partices to generate
-            w_gen = product_properties[p].avg_weight[i] * (product_properties[p].N_particles[i]/n_desired)#check for particles in the cell 
-            real_particles_produced = reaction.coefficients[p+1] * reaction.delta_n[i] 
+    # for each product 
+    for (ip, product) in enumerate(products) 
+        n_desired = product.n_d# number of desired particles touching cell, hyperparamter from the simualtion
+        # for each cell, add particles 
+        for i in 2:length(grid.cell_centers)-1
+
+            # determine the number of partices to generate
+            w_gen = product_properties[ip].avg_weight[i] * (product_properties[ip].N_particles[i]/n_desired)#check for particles in the cell 
+            real_particles_produced = reaction.product_coefficients[ip] * reaction.delta_n[i] 
             n_gen = Int32(floor(real_particles_produced / (w_gen)))
 
-            #update the generation weight slightly to consume the full delta_n 
+            # update the generation weight slightly to consume the full delta_n 
             w_gen = real_particles_produced / n_gen 
 
-            #resize the buffers 
+            # resize the buffers 
             resize!(pos_buf, n_gen)
             resize!(vel_buf, n_gen)
             resize!(weight_buf, n_gen)
 
-            #generate the particles 
-            #position 
+            # generate the particles 
+            # position 
             z_L = grid.face_centers[i]
-            pos_buf = Random.rand!(pos_buf)
+            Random.rand!(pos_buf)
             pos_buf .= dz[i] * pos_buf .+ z_L
 
-            #velocity, fix to use reactant mass
-            v_th = sqrt(reactant_properties.temp[i] / products[p].species.gas.mass)
-            vel_buf = Random.rand!(vel_buf)
+            # velocity, fix to use reactant mass
+            v_th = sqrt(reactant_properties.temp[i] / product.species.gas.mass)
+            Random.rand!(vel_buf)
             vel_buf .= vel_buf .* v_th .+ reactant_properties.vel[i]
 
-            #weight
+            # weight
             weight_buf .= w_gen 
-            #actual generation, avoid allocatting buffer at all  
-            add_particles!(products[p], pos_buf, vel_buf, weight_buf)
+            # actual generation  
+            add_particles!(product, pos_buf, vel_buf, weight_buf)
         end
     end 
 
@@ -722,8 +729,10 @@ function read_reaction_rates(filepath)
     end
 
     #include the n_0 normalization for how the rates are used 
-    #to maintain the normalization, the two densities need to be multiplied by n_0 and the entire addition divided by n_0, results in a net multiplication of n_0
-    interp_object = LinearInterpolation(values[:,2] * n_0, values[:,1])
+    #to maintain the normalization, the two densities need to be multiplied by n_0 
+    #and the entire addition divided by n_0, results in a net multiplication of n_0
+    #timestep 
+    interp_object = LinearInterpolation(values[:,2] * n_0 * t_0, values[:,1])
     return energy, interp_object
 end
 

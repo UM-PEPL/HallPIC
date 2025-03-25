@@ -539,7 +539,7 @@ function test_initialize_reaction(::Type{T}) where T
 	product = [Xenon(1)]
 
 	# initialize the struct 
-	Xe_ionization = hp.Reaction{T}(reactant, product, [1], threshold_energy, table, [0.0, 0.0, 0.0, 0.0])
+	Xe_ionization = hp.Reaction{T}(reactant, product, [1], threshold_energy, table, [0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0])
 
 	# actually test 
 	@test Xe_ionization.reactant == reactant
@@ -611,7 +611,7 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 	
 
 
-	reaction = hp.Reaction{T}(reactant_gas, product_gases, product_coefficients, threshold_energy, table, zeros(n_cell+2))
+	reaction = hp.Reaction{T}(reactant_gas, product_gases, product_coefficients, threshold_energy, table, zeros(n_cell+2), zeros(n_cell+2))
 
 	# initialize some electron properties
 	electron = hp.Gas(name=:e, mass=0.00054858)
@@ -621,14 +621,33 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 
 	# reduce weights 
 	dt = 1e-9 / hp.t_0
-	reaction, reactant = hp.deplete_reactant!(reaction, reactant, reactant_properties, grid, electron_properties, dt) 
+	reaction, reactant = hp.deplete_reactant!(reaction, reactant, reactant_properties, products, product_properties, grid, electron_properties, dt) 
 
 	# check that number is conserved 
 	hp.deposit!(reactant_properties, reactant, grid)
 	rate = reaction.rate_table(TeV)
+	delta_ns = zeros(T, n_cell+2)
 	for i in 2:n_cell+1
+
 		delta_n = dt * electron_properties.dens[i] * old_reactant_density[i] * rate
-		@test reaction.delta_n[i] ≈ delta_n 
+		# find the minimum 
+		n_consumed = Inf
+        for (ip, product) in enumerate(product_properties)
+
+            n_desired = products[ip].n_d # number of desired particles touching cell, hyperparameter from the simulation
+        
+            # determine the number of partices to generate
+            w_gen = product.avg_weight[i] * (product.N_particles[i]/n_desired) # check for particles in the cell 
+            real_particles_produced = reaction.product_coefficients[ip] * delta_n
+            n_gen = Int32(floor(real_particles_produced / (w_gen)))
+
+            n_consumed = minimum([n_consumed, n_gen * w_gen])            
+
+        end
+		delta_ns[i] = n_consumed
+
+		
+		@test reaction.delta_n[i] ≈ delta_ns[i]
 		@test isapprox(reactant_properties.dens[i], old_reactant_density[i] - delta_n; rtol)
 	end
 	# check that weights are reduced as expected 
@@ -648,8 +667,7 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 		hp.locate_particles!(product, grid)
 		hp.deposit!(product_properties[ip], product, grid) 
 		for i in 2:n_cell+1
-			delta_n = dt * electron_properties.dens[i] * old_reactant_density[i] * rate
-			@test isapprox(product_properties[ip].dens[i], old_density[i] + delta_n; rtol)
+			@test isapprox(product_properties[ip].dens[i], old_density[i] + delta_ns[i]; rtol)
 		end
 
 		# final check that the number of ions has expanded 

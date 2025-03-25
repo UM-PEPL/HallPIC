@@ -630,12 +630,13 @@ struct Reaction{T<:AbstractFloat}
     threshold_energy::T
     rate_table::LinearInterpolation
     delta_n::Vector{T}
+    delta_n_remainder::Vector{T}
 
 end
 
 
 
-function deplete_reactant!(reaction::Reaction{T}, reactant::ParticleContainer{T}, fluid_properties::SpeciesProperties{T}, grid::Grid, electron_properties::SpeciesProperties{T}, dt) where T
+function deplete_reactant!(reaction::Reaction{T}, reactant::ParticleContainer{T}, reactant_properties::SpeciesProperties{T}, products::Vector{ParticleContainer{T}}, product_properties::Vector{SpeciesProperties{T}}, grid::Grid, electron_properties::SpeciesProperties{T}, dt) where T
 
     # for each (non-ghost) cell, calculate the delta n
     for i in 2:length(grid.cell_centers)-1
@@ -643,8 +644,32 @@ function deplete_reactant!(reaction::Reaction{T}, reactant::ParticleContainer{T}
         # find the rate from a lookup table 
         rate = reaction.rate_table(electron_properties.temp[i])
         # calculate the number of particles produced
-        reaction.delta_n[i] = fluid_properties.dens[i] * electron_properties.dens[i] * rate * dt
+        reaction.delta_n[i] = (reactant_properties.dens[i] * electron_properties.dens[i] * rate * dt) + reaction.delta_n_remainder[i]
     end
+
+    # loop over the products to compute the weight consumed 
+    # for each cell, add particles 
+    for i in 2:length(grid.cell_centers)-1
+        n_consumed = Inf
+        for (ip, product) in enumerate(product_properties)
+
+            n_desired = products[ip].n_d # number of desired particles touching cell, hyperparameter from the simulation
+        
+            # determine the number of partices to generate
+            w_gen = product.avg_weight[i] * (product.N_particles[i]/n_desired) # check for particles in the cell 
+            real_particles_produced = reaction.product_coefficients[ip] * reaction.delta_n[i] 
+            n_gen = Int32(floor(real_particles_produced / (w_gen)))
+
+            n_consumed = minimum([n_consumed, n_gen * w_gen])            
+
+        end
+
+        #set the remainder and the delta n 
+        reaction.delta_n_remainder[i] = reaction.delta_n[i] - n_consumed 
+        reaction.delta_n[i] = n_consumed
+
+    end
+
 
     # now that we have the delta_n, adjust particle weights 
     for i in 2:length(reactant.pos)-1
@@ -660,7 +685,7 @@ function deplete_reactant!(reaction::Reaction{T}, reactant::ParticleContainer{T}
             # calculate the shape function for portion of particle that touches the cell 
             shape = abs(reactant.pos[i] - grid.cell_centers[idx]) / grid.dz
             # relative proportion of weight in the cell 
-            weight_proportion = reaction.delta_n[idx]/fluid_properties.dens[idx]
+            weight_proportion = reaction.delta_n[idx]/reactant_properties.dens[idx]
             # reduce the weight 
             reactant.weight[i] -= reactant.weight[i] * weight_proportion * shape
         end
@@ -689,7 +714,7 @@ function generate_products!(products::Vector{ParticleContainer{T}}, product_prop
             # determine the number of partices to generate
             w_gen = product_properties[ip].avg_weight[i] * (product_properties[ip].N_particles[i]/n_desired) # check for particles in the cell 
             real_particles_produced = reaction.product_coefficients[ip] * reaction.delta_n[i] 
-            n_gen = Int32(maximum([floor(real_particles_produced / (w_gen)), 1]))
+            n_gen = Int32(floor(real_particles_produced / (w_gen)))
 
             # update the generation weight slightly to consume the full delta_n 
             w_gen = real_particles_produced / n_gen 

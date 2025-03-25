@@ -542,7 +542,7 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
 
     # Convert energy density to nondimensional temperature
     for ic in 2:length(grid.cell_centers)-1 
-        fluid_properties.temp[ic] *= m / fluid_properties.dens[ic]
+        fluid_properties.temp[ic] *= m / (fluid_properties.dens[ic])
     end
 
     # Linearly extrapolate bulk properties to ghost cells

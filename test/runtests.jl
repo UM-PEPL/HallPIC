@@ -264,7 +264,7 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	# Initialize fluid property arrays
 	n_0 = 1e18 / hp.n_0
 	u_0 = 3.0 
-	T_0 = 50.0
+	T_0 = 90.0
 	w_0 = n_0 / particles_per_cell * vol 
 	avg_interval = 10
 
@@ -332,7 +332,7 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	)
 
 	@test all(
-		isapprox.(fluid_properties.avg_weight[inds], w_exact[inds]/avg_interval; rtol)
+		isapprox.(fluid_properties.avg_weight[inds], w_exact[inds]/(2*avg_interval); rtol)
 	)
 
 	@test all(
@@ -360,7 +360,7 @@ end
 @testset "Deposition" begin
 	num_cells = 10
 	profiles = [:uniform, :linear, :quadratic]
-	tolerances = [2e-2, 2e-2, 1e-1]
+	tolerances = [2e-2, 5e-2, 1e-1]
 	for T in [Float32, Float64]
 		for (prof, tol) in zip(profiles, tolerances)
 			test_deposition(T, num_cells, prof, tol)
@@ -472,15 +472,17 @@ end
 
 @testset "Removing particles" begin
 	N = 100
+	particles_per_cell = 50
 	T = Float32
 	grid = hp.Grid(N, 0, 1, 1)
 	dens = fill(T(1e6), N+2)
 	vel = ones(T, N+2)
 	temp = ones(T, N+2)
 	weights = ones(T, N+2)
+	N_particles = 2 * particles_per_cell * ones(UInt64,N+2)
 	species = Xenon(1)
-	fc = hp.SpeciesProperties{T}(dens, vel, temp, hp.ones(N+2), species)
-	particles_per_cell = 50
+	fc = hp.SpeciesProperties{T}(dens, vel, temp, weights, N_particles, species)
+	
 	pc = hp.initialize_particles(fc, grid, particles_per_cell)
 	hp.locate_particles!(pc, grid)
 

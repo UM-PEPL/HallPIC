@@ -672,10 +672,11 @@ end
 
 	This test case is to ensure the overall reaction functions are behaving as expected 
 	"""
+	tol = 1e-3
 
 	for T in [Float32, Float64]
 		test_initialize_reaction(T)
-		test_reaction_step(Xenon(0), [Xenon(1)], [1], "../reactions/ionization_Xe_Xe+.dat", 10, T)
+		test_reaction_step(Xenon(0), [Xenon(1)], [1], "../reactions/ionization_Xe_Xe+.dat", 10, T, tol)
 	end
 
 	"""
@@ -695,7 +696,7 @@ end
 	N = hp.Gas(name=:N, mass=14.007)
 
 	for T in [Float32, Float64]
-		test_reaction_step(N2(0), [N(0)], [2], "../reactions/Dissociation_N2.dat", 10, T)
+		test_reaction_step(N2(0), [N(0)], [2], "../reactions/Dissociation_N2.dat", 10, T, tol)
 	end
 
 	"""
@@ -714,6 +715,6 @@ end
 	O = hp.Gas(name=:O, mass=15.999)
 
 	for T in [Float32, Float64]
-		test_reaction_step(NO(0), [N(0), O(0)], [1,1], "../reactions/Dissociation_NO.dat", 60, T)
+		test_reaction_step(NO(0), [N(0), O(0)], [1,1], "../reactions/Dissociation_NO.dat", 60, T, tol)
 	end
 end

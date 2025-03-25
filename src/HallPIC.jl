@@ -682,12 +682,12 @@ function generate_products!(products::Vector{ParticleContainer{T}}, product_prop
     dz = grid.face_centers[2:end] - grid.face_centers[1:end-1]
     # for each product 
     for (ip, product) in enumerate(products) 
-        n_desired = product.n_d# number of desired particles touching cell, hyperparamter from the simualtion
+        n_desired = product.n_d # number of desired particles touching cell, hyperparameter from the simulation
         # for each cell, add particles 
         for i in 2:length(grid.cell_centers)-1
 
             # determine the number of partices to generate
-            w_gen = product_properties[ip].avg_weight[i] * (product_properties[ip].N_particles[i]/n_desired)#check for particles in the cell 
+            w_gen = product_properties[ip].avg_weight[i] * (product_properties[ip].N_particles[i]/n_desired) # check for particles in the cell 
             real_particles_produced = reaction.product_coefficients[ip] * reaction.delta_n[i] 
             n_gen = Int32(floor(real_particles_produced / (w_gen)))
 
@@ -728,10 +728,10 @@ function read_reaction_rates(filepath)
         energy, values 
     end
 
-    #include the n_0 normalization for how the rates are used 
-    #to maintain the normalization, the two densities need to be multiplied by n_0 
-    #and the entire addition divided by n_0, results in a net multiplication of n_0
-    #timestep 
+    # include the n_0 normalization for how the rates are used 
+    # to maintain the normalization, the two densities need to be multiplied by n_0 
+    # and the entire addition divided by n_0, results in a net multiplication of n_0
+    # timestep is assumed to be normalized by t_0, so multiply by t_0 as well 
     interp_object = LinearInterpolation(values[:,2] * n_0 * t_0, values[:,1])
     return energy, interp_object
 end

@@ -553,48 +553,114 @@ function test_initialize_reaction(::Type{T}) where T
 end
 
 
-function test_reaction_step(::Type{T}, rtol=0.01) where T
-	xenon = hp.Gas(name=:Xe, mass=131.293)
-
+function test_reaction_step(reactant_gas, product_gases, product_coefficients, reaction_path, TeV, ::Type{T}, rtol=0.01) where T
+	
 	# first set up the plasma 
 	# seed properties/initialize cell arrays 
 	n_cell = 10 
 	n_n = 500
-	neutral_properties = hp.SpeciesProperties{T}(n_cell+2, xenon(0))
-	ion_properties = hp.SpeciesProperties{T}(n_cell+2, xenon(1))
-	neutral_properties.dens .= 1e18 / hp.n_0# 1/m^3
-	neutral_properties.vel .= 300
-	neutral_properties.temp .= (500 / 11604) # eV
-	neutral_properties.avg_weight .= 0
-	neutral_properties.N_particles .= 0
-	ion_properties.dens .=  1e16 / hp.n_0# 1/m^3
-	ion_properties.vel .= 5000
-	ion_properties.temp .=  0.1 # eV
-	ion_properties.avg_weight .= 0
-	ion_properties.N_particles .= 0
 	grid = hp.Grid(n_cell, 0, 1.0, 1.0)
+	n_particles = n_n * n_cell 
 	
-	neutrals = hp.initialize_particles(neutral_properties, grid, n_n)
-	ions = hp.initialize_particles(ion_properties, grid, n_n)
-	n_ions = length(ions.pos)
-
+	# initialize the reactant 
+	reactant_properties = hp.SpeciesProperties{T}(n_cell+2, reactant_gas)
+	reactant_properties.dens .= 1e18 / hp.n_0# 1/m^3
+	reactant_properties.vel .= 300
+	reactant_properties.temp .= (500 / 11604) # eV
+	reactant_properties.avg_weight .= 0
+	reactant_properties.N_particles .= 0
+	reactant = hp.initialize_particles(reactant_properties, grid, n_n)
 	# deposit to grid 
-	hp.locate_particles!(neutrals, grid)
-	hp.locate_particles!(ions, grid)
-	hp.deposit!(neutral_properties, neutrals, grid)
-	hp.deposit!(ion_properties, ions, grid) 
+	hp.locate_particles!(reactant, grid)
+	hp.deposit!(reactant_properties, reactant, grid)
 
-	old_neutral_density = copy(neutral_properties.dens)
-	old_weights = copy(neutrals.weight)
+	# copy properties for tests 
+	old_reactant_density = copy(reactant_properties.dens)
+	old_weights = copy(reactant.weight)
+
+	product_properties = Vector{hp.SpeciesProperties{T}}(undef, length(product_gases))
+	products = Vector{hp.ParticleContainer{T}}(undef, length(product_gases))
+
+	for (ip, product) in enumerate(product_gases)
+
+		# initialize 
+		properties = hp.SpeciesProperties{T}(n_cell+2, product)
+		properties.dens .=  1e16 / hp.n_0# 1/m^3
+		properties.vel .= 5000
+		properties.temp .=  0.1 # eV
+		properties.avg_weight .= 0
+		properties.N_particles .= 0
+		
+
+		product = hp.initialize_particles(properties, grid, n_n)
+		
+
+		# deposit to grid 
+		hp.locate_particles!(product, grid)
+		hp.deposit!(properties, product, grid) 
+
+
+		# save to array 
+		product_properties[ip] = properties
+		products[ip] = product 
+	end
+	
 	# now can initialization for reaction properties 
 	# load the rate table 
-	filepath = "../reactions/ionization_Xe_Xe+.dat"
-	threshold_energy, table = hp.read_reaction_rates(filepath)
-
-	# define the species
-	reactant = xenon(0)
-	product = [xenon(1)]
+	threshold_energy, table = hp.read_reaction_rates(reaction_path)
 	
+
+
+	reaction = hp.Reaction{T}(reactant_gas, product_gases, product_coefficients, threshold_energy, table, zeros(n_cell+2))
+
+	# initialize some electron properties
+	electron = hp.Gas(name=:e, mass=0.00054858)
+	electron_properties = hp.SpeciesProperties{T}(n_cell+2, electron(-1))
+	electron_properties.temp .= TeV # choose 10eV for now 
+	electron_properties.dens .= product_properties[1].dens # quasineutrality 
+
+	# reduce weights 
+	dt = 1e-9 / hp.t_0
+	reaction, reactant = hp.deplete_reactant!(reaction, reactant, reactant_properties, grid, electron_properties, dt) 
+
+	# check that number is conserved 
+	hp.deposit!(reactant_properties, reactant, grid)
+	rate = reaction.rate_table(TeV)
+	for i in 2:n_cell+1
+		delta_n = dt * electron_properties.dens[i] * old_reactant_density[i] * rate
+		@test reaction.delta_n[i] ≈ delta_n 
+		@test isapprox(reactant_properties.dens[i], old_reactant_density[i] - delta_n; rtol)
+	end
+	# check that weights are reduced as expected 
+	for i in 1:length(reactant.pos)
+		@test old_weights[i] >= reactant.weight[i] 
+	end
+
+	# add particles 
+	products = hp.generate_products!(products, product_properties,reaction, reactant_properties, grid)
+
+	
+	#do the tests for each product 
+	for (ip, product) in enumerate(products)
+
+		# check that number is conserved 
+		old_density = copy(product_properties[ip].dens)
+		hp.locate_particles!(product, grid)
+		hp.deposit!(product_properties[ip], product, grid) 
+		for i in 2:n_cell+1
+			delta_n = dt * electron_properties.dens[i] * old_reactant_density[i] * rate
+			@test isapprox(product_properties[ip].dens[i], old_density[i] + delta_n; rtol)
+		end
+
+		# final check that the number of ions has expanded 
+		@test length(product.pos) > n_particles 
+	end
+end
+
+
+
+@testset "Reactions" begin
+	test_read_reaction_table()
 
 	"""
 	First test: Xe ionization 
@@ -606,58 +672,48 @@ function test_reaction_step(::Type{T}, rtol=0.01) where T
 
 	This test case is to ensure the overall reaction functions are behaving as expected 
 	"""
-	xe_ionization = hp.Reaction{T}(reactant, product, [1,1], threshold_energy, table, zeros(n_cell+2))
 
-	# initialize some electron properties
-	electron = hp.Gas(name=:e, mass=0.00054858)
-	electron_properties = hp.SpeciesProperties{T}(n_cell+2, electron(-1))
-	electron_properties.temp .= 10 # choose 10eV for now 
-	electron_properties.dens .= ion_properties.dens # quasineutrality 
-
-	# reduce weights 
-	dt = 1e-9 / hp.t_0
-	xe_ionization, neutrals = hp.deplete_reactant!(xe_ionization, neutrals, neutral_properties, grid, electron_properties, dt) 
-
-	# check that number is conserved 
-	hp.deposit!(neutral_properties, neutrals, grid)
-	rate = xe_ionization.rate_table(10)
-	for i in 2:n_cell+1
-		delta_n = dt * electron_properties.dens[i] * old_neutral_density[i] * rate
-		@test xe_ionization.delta_n[i] ≈ delta_n 
-		@test isapprox(neutral_properties.dens[i], old_neutral_density[i] - delta_n; rtol)
-	end
-	# check that weights are reduced as expected 
-	for i in 1:length(neutrals.pos)
-		@test old_weights[i] >= neutrals.weight[i] 
-	end
-
-	# add particles 
-	ions = hp.generate_products!([ions], [ion_properties],xe_ionization, neutral_properties, grid)[1]
-
-	
-	# check that number is conserved 
-	old_density = copy(ion_properties.dens)
-	hp.locate_particles!(ions, grid)
-	hp.deposit!(ion_properties, ions, grid) 
-	for i in 2:n_cell+1
-		delta_n = dt * electron_properties.dens[i] * old_neutral_density[i] * rate
-		@test isapprox(ion_properties.dens[i], old_density[i] + delta_n; rtol)
-	end
-
-	# final check that the number of ions has expanded 
-	@test length(ions.pos) > n_ions 
-
-	# should add N2 and OH decomp for testing coefficients and multiple products 
-		
-
-end
-
-
-
-@testset "Reactions" begin
-	test_read_reaction_table()
 	for T in [Float32, Float64]
 		test_initialize_reaction(T)
-		test_reaction_step(T)
+		test_reaction_step(Xenon(0), [Xenon(1)], [1], "../reactions/ionization_Xe_Xe+.dat", 10, T)
+	end
+
+	"""
+	Second test N2 dissociation
+	The purpose of this test is to ensure that the reaction functions
+	correctly handle reactions where multiple instances of the same
+	product are produced 
+
+	Tests follow the structure of the first test 
+
+	Rates & threshold_energy from J. Chem. Phys. 98, 9544–9553 (1993)
+	https://doi.org/10.1063/1.464385
+
+	"""
+
+	N2 = hp.Gas(name=:N2, mass=28.014)
+	N = hp.Gas(name=:N, mass=14.007)
+
+	for T in [Float32, Float64]
+		test_reaction_step(N2(0), [N(0)], [2], "../reactions/Dissociation_N2.dat", 10, T)
+	end
+
+	"""
+	Third test NO dissociation
+	The purpose of this test is to ensure that the reaction functions
+	correctly handle reactions where multiple products are produced 
+
+	Tests follow the structure of the first test 
+
+	Rates from M Castillo et al 2004 Plasma Sources Sci. Technol. 13 343
+	Threshold energy from  M Castillo et al 2004 Plasma Sources Sci. Technol. 13 39
+
+	"""
+
+	NO = hp.Gas(name=:NO, mass=30.006)
+	O = hp.Gas(name=:O, mass=15.999)
+
+	for T in [Float32, Float64]
+		test_reaction_step(NO(0), [N(0), O(0)], [1,1], "../reactions/Dissociation_NO.dat", 60, T)
 	end
 end

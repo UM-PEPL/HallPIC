@@ -689,7 +689,7 @@ function generate_products!(products::Vector{ParticleContainer{T}}, product_prop
             # determine the number of partices to generate
             w_gen = product_properties[ip].avg_weight[i] * (product_properties[ip].N_particles[i]/n_desired) # check for particles in the cell 
             real_particles_produced = reaction.product_coefficients[ip] * reaction.delta_n[i] 
-            n_gen = Int32(floor(real_particles_produced / (w_gen)))
+            n_gen = Int32(maximum([floor(real_particles_produced / (w_gen)), 1]))
 
             # update the generation weight slightly to consume the full delta_n 
             w_gen = real_particles_produced / n_gen 

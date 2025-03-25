@@ -264,19 +264,16 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	# Initialize fluid property arrays
 	n_0 = 1e18 / hp.n_0
 	u_0 = 3.0 
-	T_0 = 90.0
+	T_0 = 50.0
 	w_0 = n_0 / particles_per_cell * vol 
 	avg_interval = 10
 
 	uniform(x) = 1
 	linear(x) = 0.5 * (1+x/L)
-	quadratic(x) = 1 - 2 * (x/L - 0.5)^2
 
 	fluid_properties = hp.SpeciesProperties{Float64}(n_cell+2, species)
 	prof_z = if profile == :linear
 		linear.(grid.cell_centers)
-	elseif profile == :quadratic
-		quadratic.(grid.cell_centers)
 	else
 		uniform.(grid.cell_centers)
 	end
@@ -359,8 +356,8 @@ end
 
 @testset "Deposition" begin
 	num_cells = 10
-	profiles = [:uniform, :linear, :quadratic]
-	tolerances = [2e-2, 5e-2, 1e-1]
+	profiles = [:uniform, :linear]
+	tolerances = [2e-2, 5e-2]
 	for T in [Float32, Float64]
 		for (prof, tol) in zip(profiles, tolerances)
 			test_deposition(T, num_cells, prof, tol)

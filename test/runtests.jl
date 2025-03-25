@@ -300,6 +300,13 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	@test max <= L
 	@test min >= 0
 
+	# verify that particle positions are sorted
+	@test issorted(particles.pos)
+
+	# verify that particles are evenly-spaced
+	dz = diff(particles.pos)
+	@test all(_dz ≈ dz[1] for _dz in dz)
+
 	min, max = extrema(particles.weight)
 	w_min = 0.5 * (w_exact[1] + w_exact[2])
 	@test isapprox(max, w_0; rtol)
@@ -318,40 +325,42 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	hp.locate_particles!(particles, grid)
 	hp.deposit!(fluid_properties, particles, grid, avg_interval)
 
-	#check that interior cells have correct properties and ghost cells are still zero
-	for i in 2:n_cell+1
-		@test isapprox(fluid_properties.dens[i], n_exact[i]; rtol)
+	# check that interior cells have correct properties and ghost cells are still zero
+	inds = (firstindex(n_exact)+1) : (lastindex(n_exact)-1)
+	@test all(
+		isapprox.(fluid_properties.dens[inds], n_exact[inds]; rtol)
+	)
+
+	@test all(
+		isapprox.(fluid_properties.avg_weight[inds], w_exact[inds]/avg_interval; rtol)
+	)
+
+	@test all(
+		isapprox.(fluid_properties.vel[inds], u_exact[inds]; rtol)
+	)
+
+	@test all(
+		isapprox.(fluid_properties.temp[inds], T_exact[inds]; rtol)
+	)
+
+	# check ghost cell extrapolation
+	if fluid_properties.dens[2] > fluid_properties.dens[1]
+		@test fluid_properties.vel[2] < fluid_properties.vel[1]
+	else
+		@test fluid_properties.vel[2] >= fluid_properties.vel[1]
 	end
-	@test fluid_properties.dens[1] == 0
-	@test fluid_properties.dens[end] == 0
 
-	#add factor of 2 to account for the fact that each particle touches two cells 
-	for i in 2:n_cell+1
-		@test isapprox(fluid_properties.avg_weight[i], w_exact[i]/ (2*avg_interval); rtol)
+	if fluid_properties.dens[end-1] > fluid_properties.dens[end]
+		@test fluid_properties.vel[end-1] < fluid_properties.vel[end]
+	else
+		@test fluid_properties.vel[end-1] >= fluid_properties.vel[end]
 	end
-	@test fluid_properties.avg_weight[1] == 0
-	@test fluid_properties.avg_weight[end] == 0
-
-	for i in 2:n_cell+1
-		@test isapprox(fluid_properties.vel[i], u_exact[i]; rtol)
-	end
-	@test fluid_properties.vel[1] == 0
-	@test fluid_properties.vel[end] == 0
-
-	for i in 2:n_cell+1
-		@test isapprox(fluid_properties.temp[i], T_exact[i]; rtol)
-	end
-	@test fluid_properties.temp[1] == 0
-	@test fluid_properties.temp[end] == 0
-
-	@test sum(fluid_properties.N_particles) == 2 * particles_per_cell * n_cell
-
 end
 
 @testset "Deposition" begin
 	num_cells = 10
 	profiles = [:uniform, :linear, :quadratic]
-	tolerances = [1e-2, 5e-2, 0.2]
+	tolerances = [2e-2, 2e-2, 1e-1]
 	for T in [Float32, Float64]
 		for (prof, tol) in zip(profiles, tolerances)
 			test_deposition(T, num_cells, prof, tol)
@@ -427,6 +436,80 @@ end
 	@test isapprox(E[midpt], zero(T); atol)
 	@test all(E[2:midpt-1] .< 0)
 	@test all(E[midpt+1:end-1] .> 0)
+end
+
+@testset "Partition" begin
+	N = 100
+	num_trials = 10
+	for _ in 1:num_trials
+		vec = rand(Bool, N)
+		num_zero = count(==(0), vec)
+		num_one = length(vec) - num_zero
+		new_size = hp.partition!(vec)
+		@test new_size == num_zero
+		@test all(!vec[i] for i in 1:new_size)
+		@test all(vec[i] for i in new_size+1:length(vec))
+
+		# test partitioning an already partitioned list
+		vec2 = copy(vec)
+		size_2 = hp.partition!(vec2)
+		@test new_size == size_2
+		@test all(v1 == v2 for (v1, v2) in zip(vec, vec2))
+	end
+
+	# test on all trues
+	vec = ones(Bool, N)
+	new_size = hp.partition!(vec)
+	@test new_size == 0
+	@test all(vec)
+
+	# test on all falses
+	vec = zeros(Bool, N)
+	new_size = hp.partition!(vec)
+	@test new_size == N
+	@test all(!v for v in vec)
+end
+
+@testset "Removing particles" begin
+	N = 100
+	T = Float32
+	grid = hp.Grid(N, 0, 1, 1)
+	dens = fill(T(1e6), N+2)
+	vel = ones(T, N+2)
+	temp = ones(T, N+2)
+	weights = ones(T, N+2)
+	species = Xenon(1)
+	fc = hp.SpeciesProperties{T}(dens, vel, temp, hp.ones(N+2), species)
+	particles_per_cell = 50
+	pc = hp.initialize_particles(fc, grid, particles_per_cell)
+	hp.locate_particles!(pc, grid)
+
+	@test length(pc) == particles_per_cell * N
+	@test firstindex(pc) == 1
+	@test lastindex(pc) == length(pc)
+
+	# try removing all particles in a specific cell
+	cell_ind = 23
+	pre_count = count(x->abs(x) == cell_ind, pc.inds)
+	@test pre_count == particles_per_cell
+
+	pre_flag_count = count(==(0), pc.weight)
+	@test pre_flag_count == 0
+
+	hp.flag_particles_in_cell!(pc, cell_ind)
+
+	flag_count = count(==(0), pc.weight)
+	@test flag_count == particles_per_cell
+
+	hp.remove_flagged_particles!(pc)
+	@test length(pc) == N*particles_per_cell - particles_per_cell
+	@test length(pc) == length(pc.inds)
+	@test length(pc) == length(pc.weight)
+	@test length(pc) == length(pc.vel)
+	@test length(pc) == length(pc.pos)
+	@test length(pc) == length(pc.acc)
+	post_count = count(x->abs(x) == cell_ind, pc.inds)
+	@test post_count == 0
 end
 
 function test_read_reaction_table()

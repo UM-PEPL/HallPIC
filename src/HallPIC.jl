@@ -93,6 +93,96 @@ function ParticleContainer{T}(N, species::Species) where T<:AbstractFloat
 	)
 end
 
+Base.length(pc::ParticleContainer) = length(pc.pos)
+Base.firstindex(pc::ParticleContainer) = firstindex(pc.pos)
+Base.lastindex(pc::ParticleContainer) = lastindex(pc.pos)
+Base.eachindex(pc::ParticleContainer) = firstindex(pc):lastindex(pc)
+
+"""
+$(TYPEDSIGNATURES)
+
+Resize `pc` to contain `n` elements.
+If `n` is smaller than the current length, the first `n` elements will be retained.
+If `n` is larger, the new particles are not guaranteed to be initialized.
+"""
+function Base.resize!(pc::ParticleContainer, n::Integer)
+    resize!(pc.weight, n)
+    resize!(pc.pos, n)
+    resize!(pc.vel, n)
+    resize!(pc.acc, n)
+    resize!(pc.inds, n)
+end
+
+@inline function swap!(v::AbstractArray, ind_1::Integer, ind_2::Integer)
+    v[ind_1], v[ind_2] = v[ind_2], v[ind_1]
+    return v
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Swap the particle in position `ind_1` with that in position `ind_2`.
+"""
+function swap!(pc::ParticleContainer, ind_1::Integer, ind_2::Integer)
+    swap!(pc.weight, ind_1, ind_2)
+    swap!(pc.pos, ind_1, ind_2)
+    swap!(pc.vel, ind_1, ind_2)
+    swap!(pc.acc, ind_1, ind_2)
+    swap!(pc.inds, ind_1, ind_2)
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Returns `true` if the particle at position `i` should be removed
+"""
+@inline should_remove(pc::ParticleContainer, i::Integer) = pc.weight[i] <= 0
+
+"""
+$(TYPEDSIGNATURES)
+
+Partition a collection based on a predicate.
+At completion, elements for which `pred(v, index)` returns true will be at the back of the array.
+Requires a function `swap(v, index_1, index_2)` that swaps the elements of `v` at the given indices.
+Returns the index of the last `false` element.
+
+Requires that `eachindex`, `firstindex`, and `lastindex` are implemented for the given collection.
+"""
+function partition!(v, pred=getindex, swap=swap!)
+    i = firstindex(v)
+    j = lastindex(v)
+    while i <= lastindex(v)
+        # Increment `i` until we find a `true` element
+        if pred(v, i)
+            # Decrement `j` until we find a `false` element
+            while j > i && pred(v, j)
+                j -= 1
+            end
+
+            # If `i == j`, we're done and can return
+            if j <= i
+                break
+            end
+
+            swap(v, i, j)
+        end
+        i += 1
+    end
+
+    return i - 1
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Remove particles with zero weight.
+"""
+function remove_flagged_particles!(pc::ParticleContainer{T}) where T
+    new_size = partition!(pc, should_remove, swap!)
+    resize!(pc, new_size)
+    return pc
+end
+
 """
 $(TYPEDSIGNATURES)
 Push particle container to next timestep using Leapfrog scheme
@@ -100,6 +190,7 @@ Push particle container to next timestep using Leapfrog scheme
 function push!(pc::ParticleContainer, dt::AbstractFloat)
     push_vel!(pc, dt)
     push_pos!(pc, dt)
+    return pc
 end
 
 """
@@ -109,7 +200,7 @@ Add particles to a `ParticleContainer`.
 function add_particles!(pc::ParticleContainer{T}, x::Vector{T}, v::Vector{T}, w::Vector{T}) where T
 	# check that new arrays have same length
 	M = length(x)
-	N = length(pc.pos)
+	N = length(pc)
 	@assert M == length(v) && M == length(w)
 	# append position, velocity, weight to pc arrays
 	append!(pc.pos, x)
@@ -146,6 +237,52 @@ function gather!(pc::ParticleContainer{T}, E_itp::LinearInterpolation) where T
 		pc.acc[i] = T(q_m * E_itp(pc.pos[i]))
 	end
 	return pc
+end
+
+"""
+$(TYPEDEF)
+
+Particles leave the domain through this boundary.
+"""
+struct OpenBoundary end
+
+"""
+$(TYPEDEF)
+
+Particles hit a wall and accommodate to the given temperature.
+Charged particles neutralize when they hit the wall.
+
+$(TYPEDFIELDS)
+"""
+mutable struct WallBoundary
+    "The temperature of the wall, non-dimensionalized"
+    temperature::Float32
+    "The number of particles of a single species that have hit the wall this timestep"
+    count::Int32
+    function WallBoundary(temperature::AbstractFloat)
+        return new(Float32(temperature), zero(Int32))
+    end
+end
+
+const HeavySpeciesBoundary = Union{OpenBoundary, WallBoundary}
+
+@enum BoundaryLoc begin
+    Left
+    Right
+end
+
+
+"""
+$(TYPEDSIGNATURES)
+
+Flag particles in the given cell for deletion by setting their weight to zero.
+The `remove_flagged_particles!` function can then be called to remove particles with zero weight.
+"""
+function flag_particles_in_cell!(pc::ParticleContainer{T}, cell_index) where T
+    for (i, ic) in enumerate(pc.inds)
+        pred = abs(ic) != cell_index
+        pc.weight[i] *= pred
+    end
 end
 
 
@@ -236,19 +373,20 @@ function initialize_particles(sp::SpeciesProperties{T}, grid, particles_per_cell
     T_itp = LinearInterpolation(sp.temp, grid.cell_centers)
 
     for i in 2:length(grid.cell_centers) - 1
-        z = grid.cell_centers[i]
-        V = grid.cell_volumes[i]
 		z_L = grid.face_centers[i]
 		z_R = grid.face_centers[i+1]
 		dz = z_R - z_L
+        dz_part = dz / particles_per_cell
 
-		Random.rand!(pos_buf)
-		@. pos_buf = dz * pos_buf + z_L 
+        # Load particles in uniformly and evenly-spaced
+        # In addition to being smoother than random particles, it also causes the particles to be sorted by position.
+		pos_buf .= range(z_L + dz_part/2, z_R - dz_part/2, length=particles_per_cell)
 
 		Random.randn!(vel_buf)
 		@. vel_buf *= sqrt(T_itp(pos_buf) / pc.species.gas.mass)
 		@. vel_buf = vel_buf + u_itp(pos_buf)
 
+        V = grid.cell_volumes[i]
 		@. weight_buf = n_itp(pos_buf) / particles_per_cell * V
 
 		add_particles!(pc, pos_buf, vel_buf, weight_buf)
@@ -257,13 +395,6 @@ function initialize_particles(sp::SpeciesProperties{T}, grid, particles_per_cell
 	return pc
 end
 
-struct OpenBoundary end
-
-struct WallBoundary
-    temperature::Float32
-end
-
-const HeavySpeciesBoundary = Union{OpenBoundary, WallBoundary}
 
 struct Grid
     dz::Float64
@@ -413,9 +544,37 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
     for ic in 2:length(grid.cell_centers)-1 
         fluid_properties.temp[ic] *= m / fluid_properties.dens[ic]
     end
+
+    # Linearly extrapolate bulk properties to ghost cells
+    n2, n3 = fluid_properties.dens[2], fluid_properties.dens[3]
+    n1 = 2 * n2 - n3
+    dens_ratio = n2 / n1
+    fluid_properties.dens[1] = n1
+    fluid_properties.vel[1] = fluid_properties.vel[2] * dens_ratio
+    fluid_properties.temp[1] = fluid_properties.temp[2] * dens_ratio
+
+    n2, n3 = fluid_properties.dens[end-1], fluid_properties.dens[end-2]
+    n1 = 2 * n2 - n3
+    dens_ratio = n2 / n1
+    fluid_properties.dens[end] = n1
+    fluid_properties.vel[end] = fluid_properties.vel[end-1] * dens_ratio
+    fluid_properties.temp[end] = fluid_properties.temp[end-1] * dens_ratio
     
     return fluid_properties
 end
+
+function apply_boundary!(pc::ParticleContainer{T}, grid::Grid, ::OpenBoundary, loc::BoundaryLoc) where T
+    boundary_ind = if loc == Left
+        firstindex(grid.cell_centers)
+    else
+        lastindex(grid.cell_centers)
+    end
+
+    delete_particles_in_cell!(pc, boundary_ind)
+
+    return pc
+end
+
 
 function calc_electron_density_and_avg_charge!(n_e::Vector{T}, avg_charge::Vector{T}, species::Vector{SpeciesProperties{T}}) where T
     n_e .= zero(T)

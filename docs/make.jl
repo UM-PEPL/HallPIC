@@ -3,6 +3,10 @@ using HallPIC
 
 makedocs(
     sitename = "HallPIC",
+    pages = [
+        "Design Overview" => "index.md",
+        "Reactions Overview" => "reactions.md"
+    ],
     format = Documenter.HTML(),
     modules = [HallPIC]
 )

@@ -638,7 +638,7 @@ end
 
 function deplete_reactant!(reaction::Reaction{T}, reactant::ParticleContainer{T}, reactant_properties::SpeciesProperties{T}, products::Vector{ParticleContainer{T}}, product_properties::Vector{SpeciesProperties{T}}, grid::Grid, electron_properties::SpeciesProperties{T}, dt) where T
 
-    # for each (non-ghost) cell, calculate the delta n
+    # for each (non-ghost) cell, calculate the change in number density due to the reaction (delta n)
     for i in 2:length(grid.cell_centers)-1
 
         # find the rate from a lookup table 
@@ -649,26 +649,27 @@ function deplete_reactant!(reaction::Reaction{T}, reactant::ParticleContainer{T}
 
     # loop over the products to compute the weight consumed 
     # for each cell, add particles 
-    for i in 2:length(grid.cell_centers)-1
-        n_consumed = Inf
-        for (ip, product) in enumerate(product_properties)
+    fill!(reaction.delta_n_remainder, Inf)
+    for (ip, product) in enumerate(product_properties)
 
-            n_desired = products[ip].n_d # number of desired particles touching cell, hyperparameter from the simulation
-        
+        n_desired = products[ip].n_d # number of desired particles touching cell, hyperparameter from the simulation
+
+        for i in 2:length(grid.cell_centers)-1
             # determine the number of partices to generate
             w_gen = product.avg_weight[i] * (product.N_particles[i]/n_desired) # check for particles in the cell 
             real_particles_produced = reaction.product_coefficients[ip] * reaction.delta_n[i] 
-            n_gen = Int32(floor(real_particles_produced / (w_gen)))
+            n_gen = floor(Int32, real_particles_produced / (w_gen))
 
-            n_consumed = minimum([n_consumed, n_gen * w_gen])            
-
+            reaction.delta_n_remainder[i] = minimum([reaction.delta_n_remainder[i], n_gen * w_gen])            
         end
-
-        #set the remainder and the delta n 
-        reaction.delta_n_remainder[i] = reaction.delta_n[i] - n_consumed 
-        reaction.delta_n[i] = n_consumed
-
     end
+
+    for i in 2:length(grid.cell_centers)-1
+        n_consumed = reaction.delta_n_remainder[i]
+        #set the remainder and the delta n 
+        reaction.delta_n_remainder[i] = reaction.delta_n[i] - n_consumed
+        reaction.delta_n[i] = n_consumed
+    end 
 
 
     # now that we have the delta_n, adjust particle weights 

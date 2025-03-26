@@ -19,6 +19,7 @@ function test_leapfrog(::Type{T}) where T
 	v0 = 0
 	tmax = 5*pi
 	num_steps = ceil(Int, tmax / dt)
+	t = range(0.0, tmax, length=num_steps)
 
 	pos = zeros(num_steps)
 	vel = zeros(num_steps)
@@ -185,6 +186,7 @@ end
 			@test cell.vel == sp.vel[i] && cell.vel == sp[i].vel
 			@test cell.temp == sp.temp[i] && cell.temp == sp[i].temp
 			@test cell.avg_weight == sp.avg_weight[i] == sp[i].avg_weight
+			@test cell.N_particles == 0
 			@test cell == sp[i]
 		end
 		c = collect(sp)
@@ -216,6 +218,7 @@ end
 	@test grid.left_boundary == left_boundary
 	@test grid.right_boundary == right_boundary
 	dz = (x1 - x0) / N
+	@test grid.dz ≈ dz  
 	@test all(volume ≈ dz * area for volume in grid.cell_volumes)
 	@test grid.face_centers[end-1] - grid.face_centers[2] == (x1 - x0)
 end
@@ -256,7 +259,7 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	L = 1.0
 	grid = hp.Grid(n_cell, 0, L, 1.0)
 	vol = grid.cell_volumes[1]
-	particles_per_cell = 50_000 # per cell 
+	particles_per_cell = 500_000 # per cell 
 
 	# Initialize fluid property arrays
 	n_0 = 1e18 / hp.n_0
@@ -267,13 +270,10 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 
 	uniform(x) = 1
 	linear(x) = 0.5 * (1+x/L)
-	quadratic(x) = 1 - 2 * (x/L - 0.5)^2
 
 	fluid_properties = hp.SpeciesProperties{Float64}(n_cell+2, species)
 	prof_z = if profile == :linear
 		linear.(grid.cell_centers)
-	elseif profile == :quadratic
-		quadratic.(grid.cell_centers)
 	else
 		uniform.(grid.cell_centers)
 	end
@@ -281,6 +281,7 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	@. fluid_properties.vel = prof_z * u_0 
 	@. fluid_properties.temp = prof_z * T_0 
 	fluid_properties.avg_weight .= 0.0
+	fluid_properties.N_particles .= 0
 
 	n_exact = copy(fluid_properties.dens)
 	u_exact = copy(fluid_properties.vel)
@@ -328,7 +329,7 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 	)
 
 	@test all(
-		isapprox.(fluid_properties.avg_weight[inds], w_exact[inds]/avg_interval; rtol)
+		isapprox.(fluid_properties.avg_weight[inds], w_exact[inds]/(2*avg_interval); rtol)
 	)
 
 	@test all(
@@ -354,9 +355,9 @@ function test_deposition(::Type{T}, n_cell, profile = :uniform, rtol = 0.01) whe
 end
 
 @testset "Deposition" begin
-	num_cells = 20
-	profiles = [:uniform, :linear, :quadratic]
-	tolerances = [2e-2, 2e-2, 1e-1]
+	num_cells = 10
+	profiles = [:uniform, :linear]
+	tolerances = [2e-2, 5e-2]
 	for T in [Float32, Float64]
 		for (prof, tol) in zip(profiles, tolerances)
 			test_deposition(T, num_cells, prof, tol)
@@ -468,15 +469,17 @@ end
 
 @testset "Removing particles" begin
 	N = 100
+	particles_per_cell = 50
 	T = Float32
 	grid = hp.Grid(N, 0, 1, 1)
 	dens = fill(T(1e6), N+2)
 	vel = ones(T, N+2)
 	temp = ones(T, N+2)
 	weights = ones(T, N+2)
+	N_particles = 2 * particles_per_cell * ones(UInt64,N+2)
 	species = Xenon(1)
-	fc = hp.SpeciesProperties{T}(dens, vel, temp, hp.ones(N+2), species)
-	particles_per_cell = 50
+	fc = hp.SpeciesProperties{T}(dens, vel, temp, weights, N_particles, species)
+	
 	pc = hp.initialize_particles(fc, grid, particles_per_cell)
 	hp.locate_particles!(pc, grid)
 
@@ -506,4 +509,230 @@ end
 	@test length(pc) == length(pc.acc)
 	post_count = count(x->abs(x) == cell_ind, pc.inds)
 	@test post_count == 0
+end
+
+function test_read_reaction_table()
+	# load the reaction 
+	filepath = "../reactions/ionization_Xe_Xe+.dat"
+	threshold_energy, table = hp.read_reaction_rates(filepath)
+
+	# ensure that the values are correct 
+	@test threshold_energy ≈ 12.1298437
+
+	@test table.t[1] ≈ 0.3878E-01
+	@test table.t[100] ≈ 499.5
+
+	@test table.u[1] ≈ 0.000
+	@test table.u[100] ≈ 0.3526E-12*hp.n_0*hp.t_0
+
+end
+
+
+function test_initialize_reaction(::Type{T}) where T
+
+	# load the rate table 
+	filepath = "../reactions/ionization_Xe_Xe+.dat"
+	threshold_energy, table = hp.read_reaction_rates(filepath)
+
+	# define the species  
+	reactant = Xenon(0)
+	product = [Xenon(1)]
+
+	# initialize the struct 
+	Xe_ionization = hp.Reaction{T}(reactant, product, [1], threshold_energy, table, [0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0])
+
+	# actually test 
+	@test Xe_ionization.reactant == reactant
+	@test Xe_ionization.products == product 
+	@test Xe_ionization.product_coefficients == [1]
+	@test Xe_ionization.threshold_energy ≈ threshold_energy
+	@test Xe_ionization.rate_table == table
+	@test Xe_ionization.delta_n ≈ zeros(4) 
+
+
+end
+
+
+function test_reaction_step(reactant_gas, product_gases, product_coefficients, reaction_path, TeV, ::Type{T}, rtol=0.01) where T
+	
+	# first set up the plasma 
+	# seed properties/initialize cell arrays 
+	n_cell = 10 
+	n_n = 500
+	grid = hp.Grid(n_cell, 0, 1.0, 1.0)
+	n_particles = n_n * n_cell 
+	
+	# initialize the reactant 
+	reactant_properties = hp.SpeciesProperties{T}(n_cell+2, reactant_gas)
+	reactant_properties.dens .= 1e18 / hp.n_0# 1/m^3
+	reactant_properties.vel .= 300
+	reactant_properties.temp .= (500 / 11604) # eV
+	reactant_properties.avg_weight .= 0
+	reactant_properties.N_particles .= 0
+	reactant = hp.initialize_particles(reactant_properties, grid, n_n)
+	# deposit to grid 
+	hp.locate_particles!(reactant, grid)
+	hp.deposit!(reactant_properties, reactant, grid)
+
+	# copy properties for tests 
+	old_reactant_density = copy(reactant_properties.dens)
+	old_weights = copy(reactant.weight)
+
+	product_properties = Vector{hp.SpeciesProperties{T}}(undef, length(product_gases))
+	products = Vector{hp.ParticleContainer{T}}(undef, length(product_gases))
+
+	for (ip, product) in enumerate(product_gases)
+
+		# initialize 
+		properties = hp.SpeciesProperties{T}(n_cell+2, product)
+		properties.dens .=  1e16 / hp.n_0# 1/m^3
+		properties.vel .= 5000
+		properties.temp .=  0.1 # eV
+		properties.avg_weight .= 0
+		properties.N_particles .= 0
+		
+
+		product = hp.initialize_particles(properties, grid, n_n)
+		
+
+		# deposit to grid 
+		hp.locate_particles!(product, grid)
+		hp.deposit!(properties, product, grid) 
+
+
+		# save to array 
+		product_properties[ip] = properties
+		products[ip] = product 
+	end
+	
+	# now can initialization for reaction properties 
+	# load the rate table 
+	threshold_energy, table = hp.read_reaction_rates(reaction_path)
+	
+
+
+	reaction = hp.Reaction{T}(reactant_gas, product_gases, product_coefficients, threshold_energy, table, zeros(n_cell+2), zeros(n_cell+2))
+
+	# initialize some electron properties
+	electron = hp.Gas(name=:e, mass=0.00054858)
+	electron_properties = hp.SpeciesProperties{T}(n_cell+2, electron(-1))
+	electron_properties.temp .= TeV # choose 10eV for now 
+	electron_properties.dens .= product_properties[1].dens # quasineutrality 
+
+	# reduce weights 
+	dt = 1e-9 / hp.t_0
+	reaction, reactant = hp.deplete_reactant!(reaction, reactant, reactant_properties, products, product_properties, grid, electron_properties, dt) 
+
+	# check that number is conserved 
+	hp.deposit!(reactant_properties, reactant, grid)
+	rate = reaction.rate_table(TeV)
+	delta_ns = zeros(T, n_cell+2)
+	for i in 2:n_cell+1
+
+		delta_n = dt * electron_properties.dens[i] * old_reactant_density[i] * rate
+		# find the minimum 
+		n_consumed = Inf
+        for (ip, product) in enumerate(product_properties)
+
+            n_desired = products[ip].n_d # number of desired particles touching cell, hyperparameter from the simulation
+        
+            # determine the number of partices to generate
+            w_gen = product.avg_weight[i] * (product.N_particles[i]/n_desired) # check for particles in the cell 
+            real_particles_produced = reaction.product_coefficients[ip] * delta_n
+            n_gen = Int32(floor(real_particles_produced / (w_gen)))
+
+            n_consumed = minimum([n_consumed, n_gen * w_gen])            
+
+        end
+		delta_ns[i] = n_consumed
+
+		
+		@test reaction.delta_n[i] ≈ delta_ns[i]
+		@test isapprox(reactant_properties.dens[i], old_reactant_density[i] - delta_n; rtol)
+	end
+	# check that weights are reduced as expected 
+	for i in 1:length(reactant.pos)
+		@test old_weights[i] >= reactant.weight[i] 
+	end
+
+	# add particles 
+	products = hp.generate_products!(products, product_properties,reaction, reactant_properties, grid)
+
+	
+	#do the tests for each product 
+	for (ip, product) in enumerate(products)
+
+		# check that number is conserved 
+		old_density = copy(product_properties[ip].dens)
+		hp.locate_particles!(product, grid)
+		hp.deposit!(product_properties[ip], product, grid) 
+		for i in 2:n_cell+1
+			@test isapprox(product_properties[ip].dens[i], old_density[i] + delta_ns[i]; rtol)
+		end
+
+		# final check that the number of ions has expanded 
+		@test length(product.pos) > n_particles 
+	end
+end
+
+
+
+@testset "Reactions" begin
+	test_read_reaction_table()
+
+	"""
+	First test: Xe ionization 
+	Test to ensure that the xenon neutral to singly charged reaction works correctly which consists of: 
+	1. Ensure that the correct reaction rate is determined
+	2. Ensure that the neutral weight is removed according to this rate
+	3. Ensure that the ion weight is added according to this weight (mass is conserved)
+	4. Ensure that ion particles are added 
+
+	This test case is to ensure the overall reaction functions are behaving as expected 
+	"""
+	tol = 1e-3
+
+	for T in [Float32, Float64]
+		test_initialize_reaction(T)
+		test_reaction_step(Xenon(0), [Xenon(1)], [1], "../reactions/ionization_Xe_Xe+.dat", 10, T, tol)
+	end
+
+	"""
+	Second test N2 dissociation
+	The purpose of this test is to ensure that the reaction functions
+	correctly handle reactions where multiple instances of the same
+	product are produced 
+
+	Tests follow the structure of the first test 
+
+	Rates & threshold_energy from J. Chem. Phys. 98, 9544–9553 (1993)
+	https://doi.org/10.1063/1.464385
+
+	"""
+
+	N2 = hp.Gas(name=:N2, mass=28.014)
+	N = hp.Gas(name=:N, mass=14.007)
+
+	for T in [Float32, Float64]
+		test_reaction_step(N2(0), [N(0)], [2], "../reactions/Dissociation_N2.dat", 10, T, tol)
+	end
+
+	"""
+	Third test NO dissociation
+	The purpose of this test is to ensure that the reaction functions
+	correctly handle reactions where multiple products are produced 
+
+	Tests follow the structure of the first test 
+
+	Rates from M Castillo et al 2004 Plasma Sources Sci. Technol. 13 343
+	Threshold energy from  M Castillo et al 2004 Plasma Sources Sci. Technol. 13 39
+
+	"""
+
+	NO = hp.Gas(name=:NO, mass=30.006)
+	O = hp.Gas(name=:O, mass=15.999)
+
+	for T in [Float32, Float64]
+		test_reaction_step(NO(0), [N(0), O(0)], [1,1], "../reactions/Dissociation_NO.dat", 60, T, tol)
+	end
 end

@@ -406,7 +406,7 @@ end
 
 	n_0 = 1e18 / hp.n_0
 	n_e = ones(T, num_cells+2) * n_0
-	T_e = 5.0
+	T_e = ones(T, num_cells+2) * 5.0
 
 	# check that uniform density causes phi == 0 and E == 0 everywhere
 	phi = zeros(T, num_cells+2)
@@ -426,7 +426,7 @@ end
 	@test isapprox(phi[2], zero(T); atol)
 	@test isapprox(phi[num_cells+1], zero(T); atol)
 	n_ratio = maximum(n_e) / n_e[2]
-	@test maximum(phi) ≈ T_e * log(n_ratio)
+	@test maximum(phi) ≈ T_e[1] * log(n_ratio)
 	# note: this is true if we have an even number of cells,
 	# since an edge will lie exactly in the middle
 	midpt = length(E) ÷ 2 + 1
@@ -539,7 +539,7 @@ function test_initialize_reaction(::Type{T}) where T
 	product = [Xenon(1)]
 
 	# initialize the struct 
-	Xe_ionization = hp.Reaction{T}(reactant, product, [1], threshold_energy, table, [0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0])
+	Xe_ionization = hp.Reaction{T}(reactant, 0, product, [0],[1], threshold_energy, table, [0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0])
 
 	# actually test 
 	@test Xe_ionization.reactant == reactant
@@ -608,10 +608,7 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 	# now can initialization for reaction properties 
 	# load the rate table 
 	threshold_energy, table = hp.read_reaction_rates(reaction_path)
-	
-
-
-	reaction = hp.Reaction{T}(reactant_gas, product_gases, product_coefficients, threshold_energy, table, zeros(n_cell+2), zeros(n_cell+2))
+	reaction = hp.Reaction{T}(reactant_gas, 0, product_gases, zeros(UInt8, length(product_gases)), product_coefficients, threshold_energy, table, zeros(n_cell+2), zeros(n_cell+2))
 
 	# initialize some electron properties
 	electron = hp.Gas(name=:e, mass=0.00054858)
@@ -675,8 +672,6 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 	end
 end
 
-
-
 @testset "Reactions" begin
 	test_read_reaction_table()
 
@@ -735,4 +730,87 @@ end
 	for T in [Float32, Float64]
 		test_reaction_step(NO(0), [N(0), O(0)], [1,1], "../reactions/Dissociation_NO.dat", 60, T, tol)
 	end
+end
+
+function test_boltzman_simulation(::Type{T}) where T
+
+	# general initialization 
+	n_iterations = 1000
+	n_cell = 10
+	n_n = 500
+	grid = hp.Grid(n_cell, 0, 1.0, 1.0)
+	E = zeros(T, length(grid.face_centers))
+	phi = zeros(T, length(grid.cell_centers))
+	
+	# initialize neutrals 
+	neutral_properties = hp.SpeciesProperties{T}(n_cell+2, Xenon(0))
+	neutral_properties.dens .= 1e18 / hp.n_0# 1/m^3
+	neutral_properties.vel .= 300
+	neutral_properties.temp .= (500 / 11604) # eV
+	neutral_properties.avg_weight .= 0
+	neutral_properties.N_particles .= 0
+	neutrals = hp.initialize_particles(neutral_properties, grid, n_n)
+	# deposit to grid 
+	hp.locate_particles!(neutrals, grid)
+	hp.deposit!(neutral_properties, neutrals, grid)
+
+
+	# initialize ions 
+	ion_properties = hp.SpeciesProperties{T}(n_cell+2, Xenon(1))
+	ion_properties.dens .=  1e16 / hp.n_0# 1/m^3
+	ion_properties.vel .= 5000
+	ion_properties.temp .=  0.1 # eV
+	ion_properties.avg_weight .= 0
+	ion_properties.N_particles .= 0
+
+	ions = hp.initialize_particles(ion_properties, grid, n_n)
+	
+	# deposit to grid 
+	hp.locate_particles!(ions, grid)
+	hp.deposit!(ion_properties, ions, grid) 
+
+
+	# initialize some electron properties
+	electron = hp.Gas(name=:e, mass=0.00054858)
+	electron_properties = hp.SpeciesProperties{T}(n_cell+2, electron(-1))
+	electron_properties.temp .= 10 # choose 10eV for now 
+	electron_properties.dens .= ion_properties[1].dens # quasineutrality 
+
+	#initalize the reaction 
+	# load the rate table 
+	threshold_energy, table = hp.read_reaction_rates("../reactions/ionization_Xe_Xe+.dat")
+	reaction = hp.Reaction{T}(Xenon(0), 1, [Xenon(1)], [2], [1], threshold_energy, table, zeros(n_cell+2), zeros(n_cell+2))
+
+
+	# put everything into the format expected by the iterator 
+	particles = [neutrals, ions]
+	bulk_properties = [neutral_properties, ion_properties]
+	reactions = [reaction]
+	dt = T(15e-9)
+
+	#run loop 
+	for i in 1:n_iterations 
+		hp.iterate!(particles, reactions, bulk_properties, electron_properties, E, phi, grid, dt)
+		@test minimum(bulk_properties[2].dens[2:11]) > 0 
+	end
+
+end
+
+@testset "Boltzmann 2" begin
+	
+	"""
+	First test: Xe ionization 
+	Test to ensure that the xenon neutral to singly charged reaction works correctly which consists of: 
+	1. Ensure that the correct reaction rate is determined
+	2. Ensure that the neutral weight is removed according to this rate
+	3. Ensure that the ion weight is added according to this weight (mass is conserved)
+	4. Ensure that ion particles are added 
+
+	This test case is to ensure the overall reaction functions are behaving as expected 
+	"""
+
+	for T in [Float32, Float64]
+		test_boltzman_simulation(T)
+	end
+
 end

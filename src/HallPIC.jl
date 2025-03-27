@@ -605,7 +605,7 @@ function boltzmann_electric_field_and_potential!(E, phi, n_e, T_e, grid)
     n_0 = n_e[2]
 
     for (i, n) in enumerate(n_e)
-        phi[i] = phi_0 + T_e * log(n / n_0)
+        phi[i] = phi_0 + T_e[i] * log(n / n_0)
     end
 
     for i in 2:length(E)-1
@@ -625,7 +625,9 @@ Reactions definitions
 
 struct Reaction{T<:AbstractFloat}
     reactant::Species
+    reactant_idx::UInt8
     products::Vector{Species}
+    products_idx::Vector{UInt8}
     product_coefficients::Vector{UInt8}
     threshold_energy::T
     rate_table::LinearInterpolation
@@ -761,5 +763,84 @@ function read_reaction_rates(filepath)
     interp_object = LinearInterpolation(values[:,2] * n_0 * t_0, values[:,1])
     return energy, interp_object
 end
+
+
+function update_particles!(particles::Vector{ParticleContainer{T}}, reactions::Vector{Reaction{T}}, bulk_properties::Vector{SpeciesProperties{T}}, electrons::SpeciesProperties{T},  grid::Grid, dt::T) where T
+
+    # reaction step 
+    for (ir, reaction) in enumerate(reactions)
+
+        # find the relevant containers and properties 
+        reactant = particles[reaction.reactant_idx]
+        reactant_properties = bulk_properties[reaction.reactant_idx]
+        products = particles[reaction.products_idx]
+        product_properties = bulk_properties[reaction.products_idx]
+
+        # first compute the density change and deplete the reactant  
+        deplete_reactant!(reaction, reactant, reactant_properties, products, product_properties, grid, electrons ,dt)
+
+        # now add additional particles 
+        generate_products!(products, product_properties, reaction, reactant_properties, grid)
+
+        # ensure that the overall containers are updated
+        particles[reaction.reactant_idx] = reactant 
+        particles[reaction.products_idx] = products
+
+    end
+
+    # locate and push 
+    for (ic, container) in enumerate(particles)
+        locate_particles!(container, grid)
+        push!(container, dt)
+        locate_particles!(container, grid)
+    end 
+
+    return particles, reactions
+end
+
+function update_electron_density!(electrons::SpeciesProperties{T}, heavy_species_properties::Vector{SpeciesProperties{T}}) where T
+    
+    # reset the electron density 
+    electrons.dens .=0
+
+    for (is, species) in enumerate(heavy_species_properties)
+        # pull the density
+        density = species.dens
+        Z = species.species.charge 
+
+        for i in 1:length(density)
+            electrons.dens[i] += Z * density[i]
+        end
+    end
+
+    return electrons 
+end
+
+
+function iterate!(particles::Vector{ParticleContainer{T}}, reactions::Vector{Reaction{T}}, bulk_properties::Vector{SpeciesProperties{T}}, electrons::SpeciesProperties{T},E_array::Vector{T}, Phi::Vector{T}, grid::Grid, dt::T) where T
+
+    # first update the particles
+    update_particles!(particles, reactions, bulk_properties, electrons, grid, dt)
+
+    # deposit 
+    for (ip, particle) in enumerate(particles)
+        deposit!(bulk_properties[ip], particle, grid)
+    end
+
+    # update the electrons 
+    # for now this is just the boltzmann relation 
+    update_electron_density!(electrons, bulk_properties)
+
+    boltzmann_electric_field_and_potential!(E_array, Phi, electrons.dens, electrons.temp, grid)
+
+    # gather step 
+    E = LinearInterpolation(E_array, grid.face_centers)
+    for (ip, particle) in enumerate(particles)
+        gather!(particle, E)
+    end
+
+    return particles, reactions, bulk_properties, electrons, E_array, Phi 
+end
+
 
 end

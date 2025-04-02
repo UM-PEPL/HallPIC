@@ -183,15 +183,6 @@ function remove_flagged_particles!(pc::ParticleContainer{T}) where T
     return pc
 end
 
-"""
-$(TYPEDSIGNATURES)
-Push particle container to next timestep using Leapfrog scheme
-"""
-function push!(pc::ParticleContainer, dt::AbstractFloat)
-    push_vel!(pc, dt)
-    push_pos!(pc, dt)
-    return pc
-end
 
 """
 $(TYPEDSIGNATURES)
@@ -244,7 +235,38 @@ $(TYPEDEF)
 
 Particles leave the domain through this boundary.
 """
-struct OpenBoundary end
+function open_boundary!(pc::ParticleContainer, dz::Float64, boundary_side::Int8, boundary_location::AbstractFloat)
+    # flagging particles, then call remove flagged particles at the end of every step  
+    if boundary_side == -1
+        for (ip, pos) in enumerate(pc.pos)
+            if (pos - boundary_location)/dz <= -0.5  
+                pc.weight[ip] = 0.0
+            end
+        end
+    else
+        for (ip, pos) in enumerate(pc.pos)
+            if (pos - boundary_location)/dz >= 0.5  
+                pc.weight[ip] = 0.0
+            end
+        end
+    end
+    return pc
+end
+struct OpenBoundary 
+    boundary_location::Float64
+    boundary_side::Int8
+    call::Function
+    function OpenBoundary(loc::AbstractFloat, side::Int)
+        return new(Float64(loc), Int8(side), open_boundary!)
+    end
+end
+
+
+
+function wall_boundary!(pc::ParticleContainer, dz::Float64)
+    #dummy function for now 
+    return pc
+end
 
 """
 $(TYPEDEF)
@@ -259,9 +281,11 @@ mutable struct WallBoundary
     temperature::Float32
     "The number of particles of a single species that have hit the wall this timestep"
     count::Int32
+    call::Function
     function WallBoundary(temperature::AbstractFloat)
-        return new(Float32(temperature), zero(Int32))
+        return new(Float32(temperature), zero(Int32), wall_boundary!)
     end
+    
 end
 
 const HeavySpeciesBoundary = Union{OpenBoundary, WallBoundary}
@@ -406,7 +430,7 @@ struct Grid
     right_boundary::HeavySpeciesBoundary
 end
 
-function Grid(num_cells::Integer, left, right, area, left_boundary = OpenBoundary(), right_boundary = OpenBoundary())
+function Grid(num_cells::Integer, left, right, area, left_boundary = WallBoundary(0.5), right_boundary = WallBoundary(0.5))
     dz = (right - left) / num_cells
 
     face_centers = collect(range(left - dz, right + dz, step = dz))
@@ -451,6 +475,23 @@ function find_cell_indices(cell_index, grid::Grid)
     return s, ic
 end
 
+"""
+$(TYPEDSIGNATURES)
+Push particle container to next timestep using Leapfrog scheme
+"""
+function push!(pc::ParticleContainer, dt::AbstractFloat, grid::Grid)
+    push_vel!(pc, dt)
+    push_pos!(pc, dt)
+
+    #enforce boundary conditions 
+    grid.left_boundary.call(pc, grid.dz)
+    grid.right_boundary.call(pc, grid.dz)
+
+    # cleanup 
+    remove_flagged_particles!(pc)
+
+    return pc
+end
 
 """
 $(TYPEDSIGNATURES)
@@ -549,15 +590,16 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
     end
 
     # Linearly extrapolate bulk properties to ghost cells
+    # enforce maximum of order of magnitude drop to prevent negative density 
     n2, n3 = fluid_properties.dens[2], fluid_properties.dens[3]
-    n1 = 2 * n2 - n3
+    n1 = maximum([2 * n2 - n3, n2/10])
     dens_ratio = n2 / n1
     fluid_properties.dens[1] = n1
     fluid_properties.vel[1] = fluid_properties.vel[2] * dens_ratio
     fluid_properties.temp[1] = fluid_properties.temp[2] * dens_ratio
 
     n2, n3 = fluid_properties.dens[end-1], fluid_properties.dens[end-2]
-    n1 = 2 * n2 - n3
+    n1 = maximum([2 * n2 - n3, n2/10])
     dens_ratio = n2 / n1
     fluid_properties.dens[end] = n1
     fluid_properties.vel[end] = fluid_properties.vel[end-1] * dens_ratio
@@ -791,7 +833,8 @@ function update_particles!(particles::Vector{ParticleContainer{T}}, reactions::V
     # locate and push 
     for (ic, container) in enumerate(particles)
         locate_particles!(container, grid)
-        push!(container, dt)
+        push!(container, dt, grid)
+        # resolve boundary conditions here 
         locate_particles!(container, grid)
     end 
 

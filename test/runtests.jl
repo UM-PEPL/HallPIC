@@ -7,122 +7,24 @@ Documenter.doctest(hp)
 const Hydrogen = hp.Gas(name=:H, mass=1)
 const Xenon = hp.Gas(name=:Xe, mass=131.293)
 
-function test_leapfrog(::Type{T}) where T
-	function leapfrog_gather!(pc::hp.ParticleContainer)
-		@inbounds for i in eachindex(pc.pos)
-			pc.acc[i] = -pc.pos[i]
-		end
-	end
+@testset "Grid construction" begin
+	N = 100
+	left_boundary = hp.OpenBoundary(0.0, -1)
+	right_boundary = hp.WallBoundary(0.5)
+	area = 1.0
+	x0 = 0
+	x1 = 1
+	grid = hp.Grid(N, x0, x1, area, left_boundary, right_boundary)
 
-	dt = 0.2
-	x0 = 1.0
-	v0 = 0
-	tmax = 5*pi
-	num_steps = ceil(Int, tmax / dt)
-	t = range(0.0, tmax, length=num_steps)
-
-	pos = zeros(num_steps)
-	vel = zeros(num_steps)
-
-	pc = hp.ParticleContainer{T}(1, Hydrogen(1))
-
-	# Test 1: Initially-stationary particle remains at rest
-	pc.pos[1] = 0.0
-	pc.vel[1] = 0.0
-
-	# No acceleration at x = 0
-	leapfrog_gather!(pc)
-	@test pc.acc[1] == 0
-
-	hp.push_vel!(pc, -dt/2)
-
-	# No movement
-	hp.push!(pc, dt)
-	@test pc.pos[1] == 0
-	@test pc.vel[1] == 0
-
-	# Test 2: simple harmonic oscillator starting at (x,v) = (1,0)
-	# Check that leapfrog is centered as expected
-	pc.pos[1] = x0
-	pc.vel[1] = v0
-	leapfrog_gather!(pc)
-
-	# half step backward in velocity
-	hp.push_vel!(pc, -dt/2)
-	pos[1] = pc.pos[1]
-	vel[1] = pc.vel[1]
-
-	for i in 2:num_steps
-		leapfrog_gather!(pc)
-		hp.push!(pc, dt)
-
-		pos[i] = pc.pos[1]
-		vel[i] = pc.vel[1]
-	end
-
-	# Check that leapfrog is centered
-	min, max = extrema(pos)
-	@test min >= -1
-	@test max <= 1
-
-	min, max = extrema(vel)
-	@test min >= -1
-	@test max <= 1
+	@test length(grid.cell_centers) == N+2
+	@test length(grid.face_centers) == N+3
+	@test grid.left_boundary == left_boundary
+	@test grid.right_boundary == right_boundary
+	dz = (x1 - x0) / N
+	@test grid.dz ≈ dz  
+	@test all(volume ≈ dz * area for volume in grid.cell_volumes)
+	@test grid.face_centers[end-1] - grid.face_centers[2] == (x1 - x0)
 end
-
-@testset "Harmonic oscillator" begin
-	for T in [Float32, Float64]
-		test_leapfrog(T)
-	end
-end
-
-function test_linear_drop(::Type{T}, V) where T
-	pc = hp.ParticleContainer{T}(1, Hydrogen(1))
-	M = 100
-	L = 0.05
-	x = LinRange(0, L, M)
-	E = V / L * ones(M)
-
-	x_norm = x ./ hp.x_0
-	E_norm = E ./ hp.E_0
-
-	extrap = hp.DataInterpolations.ExtrapolationType.Constant
-	E_itp = hp.LinearInterpolation(E_norm, x_norm, extrapolation = extrap)
-
-	q = hp.charge(pc.species) * hp.q_e
-	m = hp.mass(pc.species) * hp.m_0
-
-	u_expected = sqrt(2 * q * V / m)
-	dt = 0.5 * L / u_expected / M
-	dt_norm = dt / hp.t_0
-
-	# pushback step
-	hp.gather!(pc, E_itp)
-	hp.push_vel!(pc, -dt_norm/2)
-
-	t = 0.0
-	while pc.pos[1] < x_norm[end] 
-		t += dt_norm
-		hp.gather!(pc, E_itp)
-		hp.push!(pc, dt_norm)
-	end
-
-	hp.push_vel!(pc, dt_norm/2)
-
-	a = hp.charge(pc.species) * E_norm[1] / hp.mass(pc.species)
-	u_exact = T(a * t)
-	x_exact = T(0.5 * a * t^2)
-
-	@test x_exact ≈ pc.pos[1]
-	@test u_exact ≈ pc.vel[1]
-end
-
-@testset "Linear potential drop" begin
-	for T in [Float32, Float64]
-		test_linear_drop(T, 600.0)
-	end
-end
-
 
 function test_add_particles(::Type{T}) where T 
 	# try initalizing the particles object 
@@ -167,6 +69,168 @@ end
 	end
 end
 
+@testset "Boundary conditions" begin 
+
+	#make a dummy particles object 
+	particles = hp.ParticleContainer{Float64}(0, Xenon(1))
+	pos = [1.57, 0.51, -1.00]
+	vel = [19823.1041, 981.471, 4319.42]
+	weight = [1.589e16, 1.589e16, 1.589e16]
+	particles = hp.add_particles!(particles, pos, vel, weight)
+	og_particles = hp.add_particles!(particles, pos, vel, weight)
+
+
+	# first test, initialize and call a wall boundary 
+	left_boundary = hp.OpenBoundary(0.0, -1)
+	left_boundary.call(particles, 0.5, left_boundary.boundary_side, left_boundary.boundary_location)
+
+	# check that the first two haven't been marked and the third has 
+	@test particles.weight[1] ≈ 1.589e16
+	@test particles.weight[2] ≈ 1.589e16
+	@test particles.weight[3] ≈ 0.0
+
+	# now check the right boundary 
+	particles.weight[3] = 1.589e16
+	right_boundary = hp.OpenBoundary(1.0, 1)
+	right_boundary.call(particles, 0.5, right_boundary.boundary_side, right_boundary.boundary_location)
+
+	# check that the last two haven't been marked and the first has 
+	@test particles.weight[1] ≈ 0.0
+	@test particles.weight[2] ≈ 1.589e16
+	@test particles.weight[3] ≈ 1.589e16
+
+
+	# now try a wall boundary 
+	particles.weight[1] = 1.589e16
+	boundary =  hp.WallBoundary(0.5)
+	boundary.call(particles, 0.5)
+
+	# check that it's unaffected 
+	@test particles.weight ≈ og_particles.weight
+
+end
+
+function test_leapfrog(::Type{T}) where T
+	function leapfrog_gather!(pc::hp.ParticleContainer)
+		@inbounds for i in eachindex(pc.pos)
+			pc.acc[i] = -pc.pos[i]
+		end
+	end
+
+	dt = 0.2
+	x0 = 1.0
+	v0 = 0
+	tmax = 5*pi
+	num_steps = ceil(Int, tmax / dt)
+	t = range(0.0, tmax, length=num_steps)
+
+	pos = zeros(num_steps)
+	vel = zeros(num_steps)
+
+	pc = hp.ParticleContainer{T}(1, Hydrogen(1))
+
+	# Test 1: Initially-stationary particle remains at rest
+	pc.pos[1] = 0.0
+	pc.vel[1] = 0.0
+	pc.weight[1] = 1e16
+
+	# No acceleration at x = 0
+	leapfrog_gather!(pc)
+	@test pc.acc[1] == 0
+
+	hp.push_vel!(pc, -dt/2)
+
+	# No movement
+	grid = hp.Grid(1, 0, 1, 1, hp.WallBoundary(0.5), hp.WallBoundary(0.5))
+	hp.push!(pc, dt, grid)
+	@test pc.pos[1] == 0
+	@test pc.vel[1] == 0
+
+	# Test 2: simple harmonic oscillator starting at (x,v) = (1,0)
+	# Check that leapfrog is centered as expected
+	pc.pos[1] = x0
+	pc.vel[1] = v0
+	leapfrog_gather!(pc)
+
+	# half step backward in velocity
+	hp.push_vel!(pc, -dt/2)
+	pos[1] = pc.pos[1]
+	vel[1] = pc.vel[1]
+
+	for i in 2:num_steps
+		leapfrog_gather!(pc)
+		hp.push!(pc, dt, grid)
+
+		pos[i] = pc.pos[1]
+		vel[i] = pc.vel[1]
+	end
+
+	# Check that leapfrog is centered
+	min, max = extrema(pos)
+	@test min >= -1
+	@test max <= 1
+
+	min, max = extrema(vel)
+	@test min >= -1
+	@test max <= 1
+end
+
+@testset "Harmonic oscillator" begin
+	for T in [Float32, Float64]
+		test_leapfrog(T)
+	end
+end
+
+function test_linear_drop(::Type{T}, V) where T
+	pc = hp.ParticleContainer{T}(1, Hydrogen(1))
+	M = 100
+	L = 0.05
+	x = LinRange(0, L, M)
+	E = V / L * ones(M)
+
+	x_norm = x ./ hp.x_0
+	E_norm = E ./ hp.E_0
+
+	extrap = hp.DataInterpolations.ExtrapolationType.Constant
+	E_itp = hp.LinearInterpolation(E_norm, x_norm, extrapolation = extrap)
+
+	q = hp.charge(pc.species) * hp.q_e
+	m = hp.mass(pc.species) * hp.m_0
+
+	u_expected = sqrt(2 * q * V / m)
+	dt = 0.5 * L / u_expected / M
+	dt_norm = dt / hp.t_0
+
+	# pushback step
+	grid = hp.Grid(1, 0, 1, 1, hp.WallBoundary(0.5), hp.WallBoundary(0.5))
+	pc.weight[1] = 1e16
+	hp.gather!(pc, E_itp)
+	hp.push_vel!(pc, -dt_norm/2)
+
+	t = 0.0
+	while pc.pos[1] < x_norm[end] 
+		t += dt_norm
+		hp.gather!(pc, E_itp)
+		hp.push!(pc, dt_norm, grid)
+	end
+
+	hp.push_vel!(pc, dt_norm/2)
+
+	a = hp.charge(pc.species) * E_norm[1] / hp.mass(pc.species)
+	u_exact = T(a * t)
+	x_exact = T(0.5 * a * t^2)
+
+	@test x_exact ≈ pc.pos[1]
+	@test u_exact ≈ pc.vel[1]
+end
+
+@testset "Linear potential drop" begin
+	for T in [Float32, Float64]
+		test_linear_drop(T, 600.0)
+	end
+end
+
+
 @testset "SpeciesProperties" begin
 	for T in [Float32, Float64]
 		N = 5
@@ -203,25 +267,6 @@ end
 	end
 end
 
-
-@testset "Grid construction" begin
-	N = 100
-	left_boundary = hp.OpenBoundary()
-	right_boundary = hp.WallBoundary(0.5)
-	area = 1.0
-	x0 = 0
-	x1 = 1
-	grid = hp.Grid(N, x0, x1, area, left_boundary, right_boundary)
-
-	@test length(grid.cell_centers) == N+2
-	@test length(grid.face_centers) == N+3
-	@test grid.left_boundary == left_boundary
-	@test grid.right_boundary == right_boundary
-	dz = (x1 - x0) / N
-	@test grid.dz ≈ dz  
-	@test all(volume ≈ dz * area for volume in grid.cell_volumes)
-	@test grid.face_centers[end-1] - grid.face_centers[2] == (x1 - x0)
-end
 
 @testset "Particle location" begin
 	N = 100
@@ -559,7 +604,7 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 	# seed properties/initialize cell arrays 
 	n_cell = 10 
 	n_n = 500
-	grid = hp.Grid(n_cell, 0, 1.0, 1.0)
+	grid = hp.Grid(n_cell, 0, 1.0, 1.0, hp.OpenBoundary(0.0, -1), hp.OpenBoundary(1.0, 1))
 	n_particles = n_n * n_cell 
 	
 	# initialize the reactant 

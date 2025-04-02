@@ -82,7 +82,7 @@ end
 
 	# first test, initialize and call a wall boundary 
 	left_boundary = hp.OpenBoundary(0.0, -1)
-	left_boundary.call(particles, 0.5, left_boundary.boundary_side, left_boundary.boundary_location)
+	left_boundary.call(particles, 0.5, left_boundary)
 
 	# check that the first two haven't been marked and the third has 
 	@test particles.weight[1] ≈ 1.589e16
@@ -92,7 +92,7 @@ end
 	# now check the right boundary 
 	particles.weight[3] = 1.589e16
 	right_boundary = hp.OpenBoundary(1.0, 1)
-	right_boundary.call(particles, 0.5, right_boundary.boundary_side, right_boundary.boundary_location)
+	right_boundary.call(particles, 0.5, right_boundary)
 
 	# check that the last two haven't been marked and the first has 
 	@test particles.weight[1] ≈ 0.0
@@ -103,7 +103,7 @@ end
 	# now try a wall boundary 
 	particles.weight[1] = 1.589e16
 	boundary =  hp.WallBoundary(0.5)
-	boundary.call(particles, 0.5)
+	boundary.call(particles, 0.5, boundary)
 
 	# check that it's unaffected 
 	@test particles.weight ≈ og_particles.weight
@@ -780,10 +780,11 @@ end
 function test_boltzman_simulation(::Type{T}) where T
 
 	# general initialization 
-	n_iterations = 1000
+	n_iterations = 100000
 	n_cell = 10
 	n_n = 500
-	grid = hp.Grid(n_cell, 0, 1.0, 1.0)
+	dt = T(15e-9)
+	grid = hp.Grid(n_cell, 0, 1.0, 1.0, hp.OpenBoundary(0.0, -1), hp.OpenBoundary(1.0, 1))
 	E = zeros(T, length(grid.face_centers))
 	phi = zeros(T, length(grid.cell_centers))
 	
@@ -803,7 +804,7 @@ function test_boltzman_simulation(::Type{T}) where T
 	# initialize ions 
 	ion_properties = hp.SpeciesProperties{T}(n_cell+2, Xenon(1))
 	ion_properties.dens .=  1e16 / hp.n_0# 1/m^3
-	ion_properties.vel .= 5000
+	ion_properties.vel .= 500
 	ion_properties.temp .=  0.1 # eV
 	ion_properties.avg_weight .= 0
 	ion_properties.N_particles .= 0
@@ -818,7 +819,7 @@ function test_boltzman_simulation(::Type{T}) where T
 	# initialize some electron properties
 	electron = hp.Gas(name=:e, mass=0.00054858)
 	electron_properties = hp.SpeciesProperties{T}(n_cell+2, electron(-1))
-	electron_properties.temp .= 10 # choose 10eV for now 
+	electron_properties.temp .= 30 # choose 10eV for now 
 	electron_properties.dens .= ion_properties[1].dens # quasineutrality 
 
 	#initalize the reaction 
@@ -831,8 +832,8 @@ function test_boltzman_simulation(::Type{T}) where T
 	particles = [neutrals, ions]
 	bulk_properties = [neutral_properties, ion_properties]
 	reactions = [reaction]
-	dt = T(15e-9)
-
+	
+	
 	#run loop 
 	for i in 1:n_iterations 
 		hp.iterate!(particles, reactions, bulk_properties, electron_properties, E, phi, grid, dt)

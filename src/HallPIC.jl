@@ -235,23 +235,7 @@ $(TYPEDEF)
 
 Particles leave the domain through this boundary.
 """
-function open_boundary!(pc::ParticleContainer, dz::Float64, boundary_side::Int8, boundary_location::AbstractFloat)
-    # flagging particles, then call remove flagged particles at the end of every step  
-    if boundary_side == -1
-        for (ip, pos) in enumerate(pc.pos)
-            if (pos - boundary_location)/dz <= -0.5  
-                pc.weight[ip] = 0.0
-            end
-        end
-    else
-        for (ip, pos) in enumerate(pc.pos)
-            if (pos - boundary_location)/dz >= 0.5  
-                pc.weight[ip] = 0.0
-            end
-        end
-    end
-    return pc
-end
+
 struct OpenBoundary 
     boundary_location::Float64
     boundary_side::Int8
@@ -261,12 +245,26 @@ struct OpenBoundary
     end
 end
 
-
-
-function wall_boundary!(pc::ParticleContainer, dz::Float64)
-    #dummy function for now 
+function open_boundary!(pc::ParticleContainer, dz::Float64, boundary::OpenBoundary)
+    # flagging particles, then call remove flagged particles at the end of every step  
+    if boundary.boundary_side == -1
+        for (ip, pos) in enumerate(pc.pos)
+            if (pos - boundary.boundary_location)/dz <= -0.5  
+                pc.weight[ip] = 0.0
+            end
+        end
+    else
+        for (ip, pos) in enumerate(pc.pos)
+            if (pos - boundary.boundary_location)/dz >= 0.5  
+                pc.weight[ip] = 0.0
+            end
+        end
+    end
     return pc
 end
+
+
+
 
 """
 $(TYPEDEF)
@@ -286,6 +284,11 @@ mutable struct WallBoundary
         return new(Float32(temperature), zero(Int32), wall_boundary!)
     end
     
+end
+
+function wall_boundary!(pc::ParticleContainer, dz::Float64, boundary::WallBoundary)
+    #dummy function for now 
+    return pc
 end
 
 const HeavySpeciesBoundary = Union{OpenBoundary, WallBoundary}
@@ -484,8 +487,8 @@ function push!(pc::ParticleContainer, dt::AbstractFloat, grid::Grid)
     push_pos!(pc, dt)
 
     #enforce boundary conditions 
-    grid.left_boundary.call(pc, grid.dz)
-    grid.right_boundary.call(pc, grid.dz)
+    grid.left_boundary.call(pc, grid.dz, grid.left_boundary)
+    grid.right_boundary.call(pc, grid.dz, grid.right_boundary)
 
     # cleanup 
     remove_flagged_particles!(pc)
@@ -512,6 +515,7 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
         # The cell index is positive if the particle is right of the cell center,
         # or negative if it is left of the cell center
         s, ic = find_cell_indices(particles.inds[ip], grid)
+
 
         # Grid information and cell weighting
         inv_vol_c = 1 / grid.cell_volumes[ic]

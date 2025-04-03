@@ -237,31 +237,9 @@ Particles leave the domain through this boundary.
 """
 
 struct OpenBoundary 
-    boundary_location::Float64
-    boundary_side::Int8
-    call::Function
-    function OpenBoundary(loc::AbstractFloat, side::Int)
-        return new(Float64(loc), Int8(side), open_boundary!)
-    end
+
 end
 
-function open_boundary!(pc::ParticleContainer, dz::Float64, boundary::OpenBoundary)
-    # flagging particles, then call remove flagged particles at the end of every step  
-    if boundary.boundary_side == -1
-        for (ip, pos) in enumerate(pc.pos)
-            if (pos - boundary.boundary_location)/dz <= -0.5  
-                pc.weight[ip] = 0.0
-            end
-        end
-    else
-        for (ip, pos) in enumerate(pc.pos)
-            if (pos - boundary.boundary_location)/dz >= 0.5  
-                pc.weight[ip] = 0.0
-            end
-        end
-    end
-    return pc
-end
 
 
 
@@ -278,18 +256,13 @@ mutable struct WallBoundary
     "The temperature of the wall, non-dimensionalized"
     temperature::Float32
     "The number of particles of a single species that have hit the wall this timestep"
-    count::Int32
-    call::Function
+    weight::Float32
     function WallBoundary(temperature::AbstractFloat)
-        return new(Float32(temperature), zero(Int32), wall_boundary!)
+        return new(Float32(temperature), Float32(0.0))
     end
     
 end
 
-function wall_boundary!(pc::ParticleContainer, dz::Float64, boundary::WallBoundary)
-    #dummy function for now 
-    return pc
-end
 
 const HeavySpeciesBoundary = Union{OpenBoundary, WallBoundary}
 
@@ -478,6 +451,31 @@ function find_cell_indices(cell_index, grid::Grid)
     return s, ic
 end
 
+function apply_boundary!(pc::ParticleContainer, grid::Grid, ::OpenBoundary, flag::Int8)
+    # flagging particles, then call remove flagged particles at the end of every step  
+    if flag == -1
+        for (ip, pos) in enumerate(pc.pos)
+            if (pos - grid.face_centers[1])/grid.dz <= -0.5  
+                pc.weight[ip] = 0.0
+            end
+        end
+    else
+        for (ip, pos) in enumerate(pc.pos)
+            if (pos - grid.face_centers[end])/grid.dz >= 0.5  
+                pc.weight[ip] = 0.0
+            end
+        end
+    end
+    return pc
+end
+
+
+function apply_boundary!(pc::ParticleContainer, grid::Grid, ::WallBoundary, flag::Int8)
+    #dummy function for now 
+    return pc
+end
+
+
 """
 $(TYPEDSIGNATURES)
 Push particle container to next timestep using Leapfrog scheme
@@ -487,8 +485,8 @@ function push!(pc::ParticleContainer, dt::AbstractFloat, grid::Grid)
     push_pos!(pc, dt)
 
     #enforce boundary conditions 
-    grid.left_boundary.call(pc, grid.dz, grid.left_boundary)
-    grid.right_boundary.call(pc, grid.dz, grid.right_boundary)
+    apply_boundary!(pc, grid, grid.left_boundary, Int8(-1))
+    apply_boundary!(pc, grid, grid.right_boundary, Int8(1))
 
     # cleanup 
     remove_flagged_particles!(pc)
@@ -612,17 +610,6 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
     return fluid_properties
 end
 
-function apply_boundary!(pc::ParticleContainer{T}, grid::Grid, ::OpenBoundary, loc::BoundaryLoc) where T
-    boundary_ind = if loc == Left
-        firstindex(grid.cell_centers)
-    else
-        lastindex(grid.cell_centers)
-    end
-
-    delete_particles_in_cell!(pc, boundary_ind)
-
-    return pc
-end
 
 
 function calc_electron_density_and_avg_charge!(n_e::Vector{T}, avg_charge::Vector{T}, species::Vector{SpeciesProperties{T}}) where T

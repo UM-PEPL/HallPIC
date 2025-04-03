@@ -9,7 +9,7 @@ const Xenon = hp.Gas(name=:Xe, mass=131.293)
 
 @testset "Grid construction" begin
 	N = 100
-	left_boundary = hp.OpenBoundary(0.0, -1)
+	left_boundary = hp.OpenBoundary()
 	right_boundary = hp.WallBoundary(0.5)
 	area = 1.0
 	x0 = 0
@@ -78,11 +78,19 @@ end
 	weight = [1.589e16, 1.589e16, 1.589e16]
 	particles = hp.add_particles!(particles, pos, vel, weight)
 	og_particles = hp.add_particles!(particles, pos, vel, weight)
+	# Grid object
+	N=10
+	left_boundary = hp.OpenBoundary()
+	right_boundary = hp.WallBoundary(0.5)
+	area = 1.0
+	x0 = 0
+	x1 = 1
+	grid = hp.Grid(N, x0, x1, area, left_boundary, right_boundary)
 
 
 	# first test, initialize and call a wall boundary 
-	left_boundary = hp.OpenBoundary(0.0, -1)
-	left_boundary.call(particles, 0.5, left_boundary)
+	left_boundary = hp.OpenBoundary()
+	hp.apply_boundary!(particles, grid, left_boundary, Int8(-1))
 
 	# check that the first two haven't been marked and the third has 
 	@test particles.weight[1] ≈ 1.589e16
@@ -91,8 +99,8 @@ end
 
 	# now check the right boundary 
 	particles.weight[3] = 1.589e16
-	right_boundary = hp.OpenBoundary(1.0, 1)
-	right_boundary.call(particles, 0.5, right_boundary)
+	right_boundary = hp.OpenBoundary()
+	hp.apply_boundary!(particles, grid, right_boundary, Int8(0))
 
 	# check that the last two haven't been marked and the first has 
 	@test particles.weight[1] ≈ 0.0
@@ -103,7 +111,7 @@ end
 	# now try a wall boundary 
 	particles.weight[1] = 1.589e16
 	boundary =  hp.WallBoundary(0.5)
-	boundary.call(particles, 0.5, boundary)
+	hp.apply_boundary!(particles, grid, boundary, Int8(0))
 
 	# check that it's unaffected 
 	@test particles.weight ≈ og_particles.weight
@@ -604,7 +612,7 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 	# seed properties/initialize cell arrays 
 	n_cell = 10 
 	n_n = 500
-	grid = hp.Grid(n_cell, 0, 1.0, 1.0, hp.OpenBoundary(0.0, -1), hp.OpenBoundary(1.0, 1))
+	grid = hp.Grid(n_cell, 0, 1.0, 1.0, hp.OpenBoundary(), hp.OpenBoundary())
 	n_particles = n_n * n_cell 
 	
 	# initialize the reactant 
@@ -784,7 +792,7 @@ function test_boltzman_simulation(::Type{T}) where T
 	n_cell = 10
 	n_n = 500
 	dt = T(15e-9)
-	grid = hp.Grid(n_cell, 0, 1.0, 1.0, hp.OpenBoundary(0.0, -1), hp.OpenBoundary(1.0, 1))
+	grid = hp.Grid(n_cell, 0, 1.0, 1.0, hp.OpenBoundary(), hp.OpenBoundary())
 	E = zeros(T, length(grid.face_centers))
 	phi = zeros(T, length(grid.cell_centers))
 	

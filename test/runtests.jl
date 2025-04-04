@@ -30,7 +30,7 @@ function test_add_particles(::Type{T}) where T
 	# try initalizing the particles object 
 	particles = hp.ParticleContainer{T}(0, Xenon(1))
 
-	#check the initialization 
+	# check the initialization 
 	@test hp.charge(particles.species) == 1
 	@test hp.mass(particles.species) == Xenon.mass
 	@test isempty(particles.pos)
@@ -45,7 +45,7 @@ function test_add_particles(::Type{T}) where T
 
 	particles = hp.add_particles!(particles, pos, vel, weight)
 
-	#check them 
+	# check them 
 	@test length(particles.pos) == 2
 	@test particles.pos[1] == pos[1]
 	@test particles.pos[2] == pos[2]
@@ -71,7 +71,7 @@ end
 
 @testset "Boundary conditions" begin 
 
-	#make a dummy particles object 
+	# make a dummy particles object 
 	particles = hp.ParticleContainer{Float64}(0, Xenon(1))
 	pos = [1.57, 0.51, -1.00]
 	vel = [19823.1041, 981.471, 4319.42]
@@ -709,7 +709,7 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 	products = hp.generate_products!(products, product_properties,reaction, reactant_properties, grid)
 
 	
-	#do the tests for each product 
+	# do the tests for each product 
 	for (ip, product) in enumerate(products)
 
 		# check that number is conserved 

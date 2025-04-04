@@ -49,7 +49,7 @@ electron_properties = hp.SpeciesProperties{T}(n_cell+2, electron(-1))
 electron_properties.temp .= 30 # choose 10eV for now 
 electron_properties.dens .= ion_properties[1].dens # quasineutrality 
 
-#initalize the reaction 
+# initalize the reaction 
 # load the rate table 
 
 #threshold_energy, table = hp.read_reaction_rates("../reactions/ionization_Xe_Xe+.dat")
@@ -65,19 +65,14 @@ reactions = [reaction]
 # initialize output object
 outputs = hp.Output{T}(grid, 2, n_iterations)
 
-#run loop 
+# run loop 
 for i in 1:n_iterations 
 	hp.iterate!(particles, reactions, bulk_properties, electron_properties, E, phi, grid, dt)
 
 	hp.save_output!(outputs, bulk_properties, phi, E)
-	#@test minimum(bulk_properties[2].dens[2:11]) > 0 
-	#@test maximum(phi[2:11]) < 1000
 end
-#Figure()
 tst= outputs.phi
 tst2= Statistics.mean(tst, dims=1)
 
 display(plot(grid.cell_centers, Statistics.mean(tst, dims=1)[:]))
 #display(plot(grid.cell_centers, Statistics.mean(outputs.densities[:,:,2], dims=1)[:]))
-#Figure()
-#plot(grid.cell_centers, outputs.densities[end,:,1])

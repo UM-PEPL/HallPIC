@@ -87,7 +87,7 @@ function ParticleContainer{T}(N, species::Species) where T<:AbstractFloat
 	vel = zeros(T, N)
 	acc = zeros(T, N)
     inds = zeros(Int, N)
-    n_d = 500#hard code for now, should be a simulation hyperparamter
+    n_d = 500 # hard code for now, should be a simulation hyperparamter
 	return ParticleContainer{T}(
 		weight, pos, vel, acc, inds, species, n_d 
 	)
@@ -499,7 +499,7 @@ function push!(pc::ParticleContainer, dt::AbstractFloat, grid::Grid)
     push_vel!(pc, dt)
     push_pos!(pc, dt)
 
-    #enforce boundary conditions 
+    # enforce boundary conditions 
     apply_boundary!(pc, grid, grid.left_boundary, Int8(-1))
     apply_boundary!(pc, grid, grid.right_boundary, Int8(1))
 
@@ -723,7 +723,7 @@ function deplete_reactant!(reaction::Reaction{T}, reactant::ParticleContainer{T}
 
     for i in 2:length(grid.cell_centers)-1
         n_consumed = reaction.delta_n_remainder[i]
-        #set the remainder and the delta n 
+        # set the remainder and the delta n 
         reaction.delta_n_remainder[i] = reaction.delta_n[i] - n_consumed
         reaction.delta_n[i] = n_consumed
     end 

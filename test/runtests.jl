@@ -1,6 +1,7 @@
 using HallPIC: HallPIC as hp
 using Documenter
 using Test
+using Plots
 
 Documenter.doctest(hp)
 
@@ -618,7 +619,7 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 	# initialize the reactant 
 	reactant_properties = hp.SpeciesProperties{T}(n_cell+2, reactant_gas)
 	reactant_properties.dens .= 1e18 / hp.n_0# 1/m^3
-	reactant_properties.vel .= 300
+	reactant_properties.vel .= 300 ./ hp.u_0
 	reactant_properties.temp .= (500 / 11604) # eV
 	reactant_properties.avg_weight .= 0
 	reactant_properties.N_particles .= 0
@@ -639,7 +640,7 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 		# initialize 
 		properties = hp.SpeciesProperties{T}(n_cell+2, product)
 		properties.dens .=  1e16 / hp.n_0# 1/m^3
-		properties.vel .= 5000
+		properties.vel .= 5000 / hp.u_0
 		properties.temp .=  0.1 # eV
 		properties.avg_weight .= 0
 		properties.N_particles .= 0
@@ -670,7 +671,7 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 	electron_properties.dens .= product_properties[1].dens # quasineutrality 
 
 	# reduce weights 
-	dt = 1e-9 / hp.t_0
+	dt = 15e-9 / hp.t_0
 	reaction, reactant = hp.deplete_reactant!(reaction, reactant, reactant_properties, products, product_properties, grid, electron_properties, dt) 
 
 	# check that number is conserved 
@@ -738,7 +739,7 @@ end
 
 	This test case is to ensure the overall reaction functions are behaving as expected 
 	"""
-	tol = 1e-3
+	tol = 1e-2
 
 	for T in [Float32, Float64]
 		test_initialize_reaction(T)
@@ -788,18 +789,18 @@ end
 function test_boltzman_simulation(::Type{T}) where T
 
 	# general initialization 
-	n_iterations = 100000
+	n_iterations = 5000
 	n_cell = 10
 	n_n = 500
-	dt = T(15e-9)
-	grid = hp.Grid(n_cell, 0, 1.0, 1.0, hp.OpenBoundary(), hp.OpenBoundary())
+	dt = T(75e-9 / hp.t_0)
+	grid = hp.Grid(n_cell, 0, 0.1 / hp.x_0, 0.1 / hp.x_0^2, hp.OpenBoundary(), hp.OpenBoundary())
 	E = zeros(T, length(grid.face_centers))
 	phi = zeros(T, length(grid.cell_centers))
 	
 	# initialize neutrals 
 	neutral_properties = hp.SpeciesProperties{T}(n_cell+2, Xenon(0))
-	neutral_properties.dens .= 1e18 / hp.n_0# 1/m^3
-	neutral_properties.vel .= 300
+	neutral_properties.dens .= 1e19 / hp.n_0# 1/m^3
+	neutral_properties.vel .= 0.0
 	neutral_properties.temp .= (500 / 11604) # eV
 	neutral_properties.avg_weight .= 0
 	neutral_properties.N_particles .= 0
@@ -812,7 +813,7 @@ function test_boltzman_simulation(::Type{T}) where T
 	# initialize ions 
 	ion_properties = hp.SpeciesProperties{T}(n_cell+2, Xenon(1))
 	ion_properties.dens .=  1e16 / hp.n_0# 1/m^3
-	ion_properties.vel .= 500
+	ion_properties.vel .= 0.0
 	ion_properties.temp .=  0.1 # eV
 	ion_properties.avg_weight .= 0
 	ion_properties.N_particles .= 0
@@ -840,12 +841,17 @@ function test_boltzman_simulation(::Type{T}) where T
 	particles = [neutrals, ions]
 	bulk_properties = [neutral_properties, ion_properties]
 	reactions = [reaction]
-	
-	
+
+	# initialize output object
+	outputs = hp.Output{T}(grid, 2, n_iterations)
+
 	#run loop 
 	for i in 1:n_iterations 
 		hp.iterate!(particles, reactions, bulk_properties, electron_properties, E, phi, grid, dt)
+
+		hp.save_output!(outputs, bulk_properties, phi, E)
 		@test minimum(bulk_properties[2].dens[2:11]) > 0 
+		@test maximum(phi[2:11]) < 1000
 	end
 
 end

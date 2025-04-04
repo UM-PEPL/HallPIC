@@ -455,13 +455,13 @@ function apply_boundary!(pc::ParticleContainer, grid::Grid, ::OpenBoundary, flag
     # flagging particles, then call remove flagged particles at the end of every step  
     if flag == -1
         for (ip, pos) in enumerate(pc.pos)
-            if (pos - grid.face_centers[1])/grid.dz <= -0.5  
+            if (pos - grid.face_centers[2])/grid.dz <= -0.5  
                 pc.weight[ip] = 0.0
             end
         end
     else
         for (ip, pos) in enumerate(pc.pos)
-            if (pos - grid.face_centers[end])/grid.dz >= 0.5  
+            if (pos - grid.face_centers[end-1])/grid.dz >= 0.5  
                 pc.weight[ip] = 0.0
             end
         end
@@ -471,7 +471,22 @@ end
 
 
 function apply_boundary!(pc::ParticleContainer, grid::Grid, ::WallBoundary, flag::Int8)
-    #dummy function for now 
+    """
+    if flag == -1
+        for (ip, pos) in enumerate(pc.pos)
+            if (pos - grid.face_centers[2])/grid.dz <= -0.5  
+                pc.vel[ip] *= -1.0
+            end
+        end
+    else
+        for (ip, pos) in enumerate(pc.pos)
+            if (pos - grid.face_centers[end-1])/grid.dz >= 0.5  
+                pc.vel[ip] *= -1.0
+            end
+        end
+    end
+
+    """
     return pc
 end
 
@@ -514,7 +529,14 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
         # or negative if it is left of the cell center
         s, ic = find_cell_indices(particles.inds[ip], grid)
 
-
+        if (s+ic > 12) || (s+ic < 1) 
+            @show s
+            @show ic 
+            @show particles.pos[ip]
+            @show particles.vel[ip]
+            @show particles.acc[ip]
+            @show grid.dz
+        end
         # Grid information and cell weighting
         inv_vol_c = 1 / grid.cell_volumes[ic]
         inv_vol_s = 1 / grid.cell_volumes[ic+s]
@@ -874,6 +896,56 @@ function iterate!(particles::Vector{ParticleContainer{T}}, reactions::Vector{Rea
     end
 
     return particles, reactions, bulk_properties, electrons, E_array, Phi 
+end
+
+
+#======================================================
+Output definitions
+======================================================#
+struct Output{T<:AbstractFloat}
+    densities::Array{T}
+    velocities::Array{T}
+    temperatures::Array{T}
+    phi::Matrix{T}
+    E::Matrix{T}
+    call_count::Vector{Int64}
+
+end
+
+function Output{T}(grid::Grid, n_species::Int64 , save_iterations::Int64) where T
+
+    n_cells = length(grid.cell_centers)
+    n_edges = length(grid.face_centers)
+
+    cell_buf = Matrix{T}(undef,save_iterations, n_cells)
+    edge_buf = Matrix{T}(undef,save_iterations, n_edges)
+
+    species_buf = zeros(T, save_iterations, n_cells, n_species )
+    
+
+    return Output(species_buf, copy(species_buf), copy(species_buf), cell_buf, edge_buf, [1])
+
+end
+
+function save_output!(output::Output{T}, fluid_properties::Vector{SpeciesProperties{T}}, phi::Vector{T}, E::Vector{T}) where T
+    
+    row = output.call_count[1]
+
+    # set the field and potential
+    output.phi[row, :] .= phi
+    output.E[row, :] .= E
+
+    # save properties for all fluids 
+    for (f, properties) in enumerate(fluid_properties)
+        output.densities[row,:, f] .= properties.dens
+        output.velocities[row,:, f] .= properties.vel
+        output.temperatures[row,:, f] .= properties.temp
+    end
+
+    # iterate the call counter 
+    output.call_count[1] = row + 1 
+
+    return output 
 end
 
 

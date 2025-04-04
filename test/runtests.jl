@@ -1,7 +1,7 @@
 using HallPIC: HallPIC as hp
 using Documenter
 using Test
-using Plots
+#using Plots
 
 Documenter.doctest(hp)
 

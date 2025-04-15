@@ -1,7 +1,7 @@
 using HallPIC: HallPIC as hp 
 using Plots
 using Statistics
-using JSON 
+using JSON3
 
 const Xenon = hp.Gas(name=:Xe, mass=131.293)
 
@@ -77,5 +77,5 @@ end
 display(plot(grid.cell_centers, Statistics.mean(outputs.phi, dims=1)[:]))
 
 open("boltzmann_output.json", "w") do f 
-	JSON.print(f, outputs)
+	JSON3.print(f, outputs)
 end

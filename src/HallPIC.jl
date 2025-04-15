@@ -27,6 +27,7 @@ const N_A = 6.022e26
 const m_0 = 1 / N_A
 const n_0 = 1e12
 const phi_0 = 1.0
+const m_e = 0.00054858 #normalized electron mass 
 
 # Derived quantities
 const x_0 = 1 / cbrt(n_0)
@@ -679,16 +680,15 @@ Reactions definitions
 ======================================================#
 
 struct Reaction{T<:AbstractFloat}
-    reactant::Species
-    reactant_idx::UInt8
-    products::Vector{Species}
-    products_idx::Vector{UInt8}
-    product_coefficients::Vector{UInt8}
-    threshold_energy::T
     rate_table::LinearInterpolation
+    products::Vector{Species}
     delta_n::Vector{T}
     delta_n_remainder::Vector{T}
-
+    products_idx::Vector{UInt8}
+    product_coefficients::Vector{UInt8}
+    reactant::Species
+    threshold_energy::T
+    reactant_idx::UInt8
 end
 
 

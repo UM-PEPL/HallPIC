@@ -592,7 +592,7 @@ function test_initialize_reaction(::Type{T}) where T
 	product = [Xenon(1)]
 
 	# initialize the struct 
-	Xe_ionization = hp.Reaction{T}(reactant, 0, product, [0],[1], threshold_energy, table, [0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0])
+	Xe_ionization = hp.Reaction{T}(table, product, [0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0],  [0],[1], reactant, threshold_energy, 0)
 
 	# actually test 
 	@test Xe_ionization.reactant == reactant
@@ -661,10 +661,10 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 	# now can initialization for reaction properties 
 	# load the rate table 
 	threshold_energy, table = hp.read_reaction_rates(reaction_path)
-	reaction = hp.Reaction{T}(reactant_gas, 0, product_gases, zeros(UInt8, length(product_gases)), product_coefficients, threshold_energy, table, zeros(n_cell+2), zeros(n_cell+2))
+	reaction = hp.Reaction{T}(table, product_gases,  zeros(n_cell+2), zeros(n_cell+2), zeros(UInt8, length(product_gases)), product_coefficients, reactant_gas, threshold_energy, 0)
 
 	# initialize some electron properties
-	electron = hp.Gas(name=:e, mass=0.00054858)
+	electron = hp.Gas(name=:e, mass=hp.m_e)
 	electron_properties = hp.SpeciesProperties{T}(n_cell+2, electron(-1))
 	electron_properties.temp .= TeV # choose 10eV for now 
 	electron_properties.dens .= product_properties[1].dens # quasineutrality 
@@ -677,6 +677,7 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 	hp.deposit!(reactant_properties, reactant, grid)
 	rate = reaction.rate_table(TeV)
 	delta_ns = zeros(T, n_cell+2)
+	delta_n_vals = zeros(T, n_cell+2)
 	for i in 2:n_cell+1
 
 		delta_n = dt * electron_properties.dens[i] * old_reactant_density[i] * rate
@@ -695,15 +696,15 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 
         end
 		delta_ns[i] = n_consumed
-
+		delta_n_vals[i] = delta_n
+	end
 		
-		@test reaction.delta_n[i] ≈ delta_ns[i]
-		@test isapprox(reactant_properties.dens[i], old_reactant_density[i] - delta_n; rtol)
-	end
+	@test all(reaction.delta_n .≈ delta_ns)
+	@test all(isapprox(reactant_properties.dens, old_reactant_density .- delta_n_vals; rtol))
+
 	# check that weights are reduced as expected 
-	for i in 1:length(reactant.pos)
-		@test old_weights[i] >= reactant.weight[i] 
-	end
+	@test all(old_weights .>= reactant.weight)
+	
 
 	# add particles 
 	products = hp.generate_products!(products, product_properties,reaction, reactant_properties, grid)
@@ -716,9 +717,8 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 		old_density = copy(product_properties[ip].dens)
 		hp.locate_particles!(product, grid)
 		hp.deposit!(product_properties[ip], product, grid) 
-		for i in 2:n_cell+1
-			@test isapprox(product_properties[ip].dens[i], old_density[i] + delta_ns[i]; rtol)
-		end
+		
+		@test all(isapprox(product_properties[ip].dens, old_density + delta_ns; rtol))
 
 		# final check that the number of ions has expanded 
 		@test length(product.pos) > n_particles 

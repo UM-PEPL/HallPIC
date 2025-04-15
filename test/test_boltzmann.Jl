@@ -1,6 +1,7 @@
 using HallPIC: HallPIC as hp 
 using Plots
 using Statistics
+using JSON 
 
 const Xenon = hp.Gas(name=:Xe, mass=131.293)
 
@@ -44,7 +45,7 @@ hp.deposit!(ion_properties, ions, grid)
 
 
 # initialize some electron properties
-electron = hp.Gas(name=:e, mass=0.00054858)
+electron = hp.Gas(name=:e, mass=hp.m_e)
 electron_properties = hp.SpeciesProperties{T}(n_cell+2, electron(-1))
 electron_properties.temp .= 30 # choose 10eV for now 
 electron_properties.dens .= ion_properties[1].dens # quasineutrality 
@@ -54,7 +55,7 @@ electron_properties.dens .= ion_properties[1].dens # quasineutrality
 
 #threshold_energy, table = hp.read_reaction_rates("../reactions/ionization_Xe_Xe+.dat")
 threshold_energy, table = hp.read_reaction_rates("C:/Users/brickd/.julia/dev/HallPIC/reactions/ionization_Xe_Xe+.dat")
-reaction = hp.Reaction{T}(Xenon(0), 1, [Xenon(1)], [2], [1], threshold_energy, table, zeros(n_cell+2), zeros(n_cell+2))
+reaction = hp.Reaction{T}(table, [Xenon(1)], zeros(n_cell+2), zeros(n_cell+2), [2], [1], Xenon(0), threshold_energy, 1)
 
 
 # put everything into the format expected by the iterator 
@@ -71,8 +72,10 @@ for i in 1:n_iterations
 
 	hp.save_output!(outputs, bulk_properties, phi, E)
 end
-tst= outputs.phi
-tst2= Statistics.mean(tst, dims=1)
 
-display(plot(grid.cell_centers, Statistics.mean(tst, dims=1)[:]))
-#display(plot(grid.cell_centers, Statistics.mean(outputs.densities[:,:,2], dims=1)[:]))
+
+display(plot(grid.cell_centers, Statistics.mean(outputs.phi, dims=1)[:]))
+
+open("boltzmann_output.json", "w") do f 
+	JSON.print(f, outputs)
+end

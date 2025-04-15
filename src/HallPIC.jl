@@ -27,6 +27,7 @@ const N_A = 6.022e26
 const m_0 = 1 / N_A
 const n_0 = 1e12
 const phi_0 = 1.0
+const m_e = 0.00054858 #normalized electron mass 
 
 # Derived quantities
 const x_0 = 1 / cbrt(n_0)
@@ -87,7 +88,7 @@ function ParticleContainer{T}(N, species::Species) where T<:AbstractFloat
 	vel = zeros(T, N)
 	acc = zeros(T, N)
     inds = zeros(Int, N)
-    n_d = 500#hard code for now, should be a simulation hyperparamter
+    n_d = 500 # hard code for now, should be a simulation hyperparamter
 	return ParticleContainer{T}(
 		weight, pos, vel, acc, inds, species, n_d 
 	)
@@ -183,15 +184,6 @@ function remove_flagged_particles!(pc::ParticleContainer{T}) where T
     return pc
 end
 
-"""
-$(TYPEDSIGNATURES)
-Push particle container to next timestep using Leapfrog scheme
-"""
-function push!(pc::ParticleContainer, dt::AbstractFloat)
-    push_vel!(pc, dt)
-    push_pos!(pc, dt)
-    return pc
-end
 
 """
 $(TYPEDSIGNATURES)
@@ -244,7 +236,14 @@ $(TYPEDEF)
 
 Particles leave the domain through this boundary.
 """
-struct OpenBoundary end
+
+struct OpenBoundary 
+
+end
+
+
+
+
 
 """
 $(TYPEDEF)
@@ -258,11 +257,13 @@ mutable struct WallBoundary
     "The temperature of the wall, non-dimensionalized"
     temperature::Float32
     "The number of particles of a single species that have hit the wall this timestep"
-    count::Int32
+    weight::Float32
     function WallBoundary(temperature::AbstractFloat)
-        return new(Float32(temperature), zero(Int32))
+        return new(Float32(temperature), Float32(0.0))
     end
+    
 end
+
 
 const HeavySpeciesBoundary = Union{OpenBoundary, WallBoundary}
 
@@ -406,7 +407,7 @@ struct Grid
     right_boundary::HeavySpeciesBoundary
 end
 
-function Grid(num_cells::Integer, left, right, area, left_boundary = OpenBoundary(), right_boundary = OpenBoundary())
+function Grid(num_cells::Integer, left, right, area, left_boundary = WallBoundary(0.5), right_boundary = WallBoundary(0.5))
     dz = (right - left) / num_cells
 
     face_centers = collect(range(left - dz, right + dz, step = dz))
@@ -451,6 +452,63 @@ function find_cell_indices(cell_index, grid::Grid)
     return s, ic
 end
 
+function apply_boundary!(pc::ParticleContainer, grid::Grid, ::OpenBoundary, flag::Int8)
+    # flagging particles, then call remove flagged particles at the end of every step  
+    if flag == -1
+        for (ip, pos) in enumerate(pc.pos)
+            if (pos - grid.face_centers[2])/grid.dz <= -0.5  
+                pc.weight[ip] = 0.0
+            end
+        end
+    else
+        for (ip, pos) in enumerate(pc.pos)
+            if (pos - grid.face_centers[end-1])/grid.dz >= 0.5  
+                pc.weight[ip] = 0.0
+            end
+        end
+    end
+    return pc
+end
+
+
+function apply_boundary!(pc::ParticleContainer, grid::Grid, ::WallBoundary, flag::Int8)
+    """
+    if flag == -1
+        for (ip, pos) in enumerate(pc.pos)
+            if (pos - grid.face_centers[2])/grid.dz <= -0.5  
+                pc.vel[ip] *= -1.0
+            end
+        end
+    else
+        for (ip, pos) in enumerate(pc.pos)
+            if (pos - grid.face_centers[end-1])/grid.dz >= 0.5  
+                pc.vel[ip] *= -1.0
+            end
+        end
+    end
+
+    """
+    return pc
+end
+
+
+"""
+$(TYPEDSIGNATURES)
+Push particle container to next timestep using Leapfrog scheme
+"""
+function push!(pc::ParticleContainer, dt::AbstractFloat, grid::Grid)
+    push_vel!(pc, dt)
+    push_pos!(pc, dt)
+
+    # enforce boundary conditions 
+    apply_boundary!(pc, grid, grid.left_boundary, Int8(-1))
+    apply_boundary!(pc, grid, grid.right_boundary, Int8(1))
+
+    # cleanup 
+    remove_flagged_particles!(pc)
+
+    return pc
+end
 
 """
 $(TYPEDSIGNATURES)
@@ -472,6 +530,14 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
         # or negative if it is left of the cell center
         s, ic = find_cell_indices(particles.inds[ip], grid)
 
+        if (s+ic > 12) || (s+ic < 1) 
+            @show s
+            @show ic 
+            @show particles.pos[ip]
+            @show particles.vel[ip]
+            @show particles.acc[ip]
+            @show grid.dz
+        end
         # Grid information and cell weighting
         inv_vol_c = 1 / grid.cell_volumes[ic]
         inv_vol_s = 1 / grid.cell_volumes[ic+s]
@@ -549,15 +615,16 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
     end
 
     # Linearly extrapolate bulk properties to ghost cells
+    # enforce maximum of order of magnitude drop to prevent negative density 
     n2, n3 = fluid_properties.dens[2], fluid_properties.dens[3]
-    n1 = 2 * n2 - n3
+    n1 = maximum([2 * n2 - n3, n2/10])
     dens_ratio = n2 / n1
     fluid_properties.dens[1] = n1
     fluid_properties.vel[1] = fluid_properties.vel[2] * dens_ratio
     fluid_properties.temp[1] = fluid_properties.temp[2] * dens_ratio
 
     n2, n3 = fluid_properties.dens[end-1], fluid_properties.dens[end-2]
-    n1 = 2 * n2 - n3
+    n1 = maximum([2 * n2 - n3, n2/10])
     dens_ratio = n2 / n1
     fluid_properties.dens[end] = n1
     fluid_properties.vel[end] = fluid_properties.vel[end-1] * dens_ratio
@@ -566,17 +633,6 @@ function deposit!(fluid_properties::SpeciesProperties{T}, particles::ParticleCon
     return fluid_properties
 end
 
-function apply_boundary!(pc::ParticleContainer{T}, grid::Grid, ::OpenBoundary, loc::BoundaryLoc) where T
-    boundary_ind = if loc == Left
-        firstindex(grid.cell_centers)
-    else
-        lastindex(grid.cell_centers)
-    end
-
-    delete_particles_in_cell!(pc, boundary_ind)
-
-    return pc
-end
 
 
 function calc_electron_density_and_avg_charge!(n_e::Vector{T}, avg_charge::Vector{T}, species::Vector{SpeciesProperties{T}}) where T
@@ -605,7 +661,7 @@ function boltzmann_electric_field_and_potential!(E, phi, n_e, T_e, grid)
     n_0 = n_e[2]
 
     for (i, n) in enumerate(n_e)
-        phi[i] = phi_0 + T_e * log(n / n_0)
+        phi[i] = phi_0 + T_e[i] * log(n / n_0)
     end
 
     for i in 2:length(E)-1
@@ -624,14 +680,15 @@ Reactions definitions
 ======================================================#
 
 struct Reaction{T<:AbstractFloat}
-    reactant::Species
-    products::Vector{Species}
-    product_coefficients::Vector{UInt8}
-    threshold_energy::T
     rate_table::LinearInterpolation
+    products::Vector{Species}
     delta_n::Vector{T}
     delta_n_remainder::Vector{T}
-
+    products_idx::Vector{UInt8}
+    product_coefficients::Vector{UInt8}
+    reactant::Species
+    threshold_energy::T
+    reactant_idx::UInt8
 end
 
 
@@ -666,7 +723,7 @@ function deplete_reactant!(reaction::Reaction{T}, reactant::ParticleContainer{T}
 
     for i in 2:length(grid.cell_centers)-1
         n_consumed = reaction.delta_n_remainder[i]
-        #set the remainder and the delta n 
+        # set the remainder and the delta n 
         reaction.delta_n_remainder[i] = reaction.delta_n[i] - n_consumed
         reaction.delta_n[i] = n_consumed
     end 
@@ -761,5 +818,135 @@ function read_reaction_rates(filepath)
     interp_object = LinearInterpolation(values[:,2] * n_0 * t_0, values[:,1])
     return energy, interp_object
 end
+
+
+function update_particles!(particles::Vector{ParticleContainer{T}}, reactions::Vector{Reaction{T}}, bulk_properties::Vector{SpeciesProperties{T}}, electrons::SpeciesProperties{T},  grid::Grid, dt::T) where T
+
+    # reaction step 
+    for (ir, reaction) in enumerate(reactions)
+
+        # find the relevant containers and properties 
+        reactant = particles[reaction.reactant_idx]
+        reactant_properties = bulk_properties[reaction.reactant_idx]
+        products = particles[reaction.products_idx]
+        product_properties = bulk_properties[reaction.products_idx]
+
+        # first compute the density change and deplete the reactant  
+        deplete_reactant!(reaction, reactant, reactant_properties, products, product_properties, grid, electrons ,dt)
+
+        # now add additional particles 
+        generate_products!(products, product_properties, reaction, reactant_properties, grid)
+
+        # ensure that the overall containers are updated
+        particles[reaction.reactant_idx] = reactant 
+        particles[reaction.products_idx] = products
+
+    end
+
+    # locate and push 
+    for (ic, container) in enumerate(particles)
+        locate_particles!(container, grid)
+        push!(container, dt, grid)
+        # resolve boundary conditions here 
+        locate_particles!(container, grid)
+    end 
+
+    return particles, reactions
+end
+
+function update_electron_density!(electrons::SpeciesProperties{T}, heavy_species_properties::Vector{SpeciesProperties{T}}) where T
+    
+    # reset the electron density 
+    electrons.dens .=0
+
+    for (is, species) in enumerate(heavy_species_properties)
+        # pull the density
+        density = species.dens
+        Z = species.species.charge 
+
+        for i in 1:length(density)
+            electrons.dens[i] += Z * density[i]
+        end
+    end
+
+    return electrons 
+end
+
+
+function iterate!(particles::Vector{ParticleContainer{T}}, reactions::Vector{Reaction{T}}, bulk_properties::Vector{SpeciesProperties{T}}, electrons::SpeciesProperties{T},E_array::Vector{T}, Phi::Vector{T}, grid::Grid, dt::T) where T
+
+    # first update the particles
+    update_particles!(particles, reactions, bulk_properties, electrons, grid, dt)
+
+    # deposit 
+    for (ip, particle) in enumerate(particles)
+        deposit!(bulk_properties[ip], particle, grid)
+    end
+
+    # update the electrons 
+    # for now this is just the boltzmann relation 
+    update_electron_density!(electrons, bulk_properties)
+
+    boltzmann_electric_field_and_potential!(E_array, Phi, electrons.dens, electrons.temp, grid)
+
+    # gather step 
+    E = LinearInterpolation(E_array, grid.face_centers)
+    for (ip, particle) in enumerate(particles)
+        gather!(particle, E)
+    end
+
+    return particles, reactions, bulk_properties, electrons, E_array, Phi 
+end
+
+
+#======================================================
+Output definitions
+======================================================#
+struct Output{T<:AbstractFloat}
+    densities::Array{T}
+    velocities::Array{T}
+    temperatures::Array{T}
+    phi::Matrix{T}
+    E::Matrix{T}
+    call_count::Vector{Int64}
+
+end
+
+function Output{T}(grid::Grid, n_species::Int64 , save_iterations::Int64) where T
+
+    n_cells = length(grid.cell_centers)
+    n_edges = length(grid.face_centers)
+
+    cell_buf = Matrix{T}(undef,save_iterations, n_cells)
+    edge_buf = Matrix{T}(undef,save_iterations, n_edges)
+
+    species_buf = zeros(T, save_iterations, n_cells, n_species )
+    
+
+    return Output(species_buf, copy(species_buf), copy(species_buf), cell_buf, edge_buf, [1])
+
+end
+
+function save_output!(output::Output{T}, fluid_properties::Vector{SpeciesProperties{T}}, phi::Vector{T}, E::Vector{T}) where T
+    
+    row = output.call_count[1]
+
+    # set the field and potential
+    output.phi[row, :] .= phi
+    output.E[row, :] .= E
+
+    # save properties for all fluids 
+    for (f, properties) in enumerate(fluid_properties)
+        output.densities[row,:, f] .= properties.dens
+        output.velocities[row,:, f] .= properties.vel
+        output.temperatures[row,:, f] .= properties.temp
+    end
+
+    # iterate the call counter 
+    output.call_count[1] = row + 1 
+
+    return output 
+end
+
 
 end

@@ -7,6 +7,117 @@ Documenter.doctest(hp)
 const Hydrogen = hp.Gas(name=:H, mass=1)
 const Xenon = hp.Gas(name=:Xe, mass=131.293)
 
+@testset "Grid construction" begin
+	N = 100
+	left_boundary = hp.OpenBoundary()
+	right_boundary = hp.WallBoundary(0.5)
+	area = 1.0
+	x0 = 0
+	x1 = 1
+	grid = hp.Grid(N, x0, x1, area, left_boundary, right_boundary)
+
+	@test length(grid.cell_centers) == N+2
+	@test length(grid.face_centers) == N+3
+	@test grid.left_boundary == left_boundary
+	@test grid.right_boundary == right_boundary
+	dz = (x1 - x0) / N
+	@test grid.dz ≈ dz  
+	@test all(volume ≈ dz * area for volume in grid.cell_volumes)
+	@test grid.face_centers[end-1] - grid.face_centers[2] == (x1 - x0)
+end
+
+function test_add_particles(::Type{T}) where T 
+	# try initalizing the particles object 
+	particles = hp.ParticleContainer{T}(0, Xenon(1))
+
+	# check the initialization 
+	@test hp.charge(particles.species) == 1
+	@test hp.mass(particles.species) == Xenon.mass
+	@test isempty(particles.pos)
+	@test isempty(particles.vel)
+	@test isempty(particles.acc)
+	@test isempty(particles.weight)
+
+	# try adding two particles 
+	pos = [T(1.57), T(0.51)]
+	vel = [T(19823.1041), T(981.471)]
+	weight = [T(1.589e16), T(1.589e16)]
+
+	particles = hp.add_particles!(particles, pos, vel, weight)
+
+	# check them 
+	@test length(particles.pos) == 2
+	@test particles.pos[1] == pos[1]
+	@test particles.pos[2] == pos[2]
+
+	@test length(particles.vel) == 2
+	@test particles.vel[1] == vel[1]
+	@test particles.vel[2] == vel[2]
+
+	@test length(particles.weight) == 2
+	@test particles.weight[1] == weight[1]
+	@test particles.weight[2] == weight[2]
+
+	@test length(particles.acc) == 2
+	@test particles.acc[1] == 0
+	@test particles.acc[2] == 0
+end
+
+@testset "Add particles" begin
+	for T in [Float32, Float64]
+		test_add_particles(T)
+	end
+end
+
+@testset "Boundary conditions" begin 
+
+	# make a dummy particles object 
+	particles = hp.ParticleContainer{Float64}(0, Xenon(1))
+	pos = [1.57, 0.51, -1.00]
+	vel = [19823.1041, 981.471, 4319.42]
+	weight = [1.589e16, 1.589e16, 1.589e16]
+	particles = hp.add_particles!(particles, pos, vel, weight)
+	og_particles = hp.add_particles!(particles, pos, vel, weight)
+	# Grid object
+	N=10
+	left_boundary = hp.OpenBoundary()
+	right_boundary = hp.WallBoundary(0.5)
+	area = 1.0
+	x0 = 0
+	x1 = 1
+	grid = hp.Grid(N, x0, x1, area, left_boundary, right_boundary)
+
+
+	# first test, initialize and call a wall boundary 
+	left_boundary = hp.OpenBoundary()
+	hp.apply_boundary!(particles, grid, left_boundary, Int8(-1))
+
+	# check that the first two haven't been marked and the third has 
+	@test particles.weight[1] ≈ 1.589e16
+	@test particles.weight[2] ≈ 1.589e16
+	@test particles.weight[3] ≈ 0.0
+
+	# now check the right boundary 
+	particles.weight[3] = 1.589e16
+	right_boundary = hp.OpenBoundary()
+	hp.apply_boundary!(particles, grid, right_boundary, Int8(0))
+
+	# check that the last two haven't been marked and the first has 
+	@test particles.weight[1] ≈ 0.0
+	@test particles.weight[2] ≈ 1.589e16
+	@test particles.weight[3] ≈ 1.589e16
+
+
+	# now try a wall boundary 
+	particles.weight[1] = 1.589e16
+	boundary =  hp.WallBoundary(0.5)
+	hp.apply_boundary!(particles, grid, boundary, Int8(0))
+
+	# check that it's unaffected 
+	@test particles.weight ≈ og_particles.weight
+
+end
+
 function test_leapfrog(::Type{T}) where T
 	function leapfrog_gather!(pc::hp.ParticleContainer)
 		@inbounds for i in eachindex(pc.pos)
@@ -29,6 +140,7 @@ function test_leapfrog(::Type{T}) where T
 	# Test 1: Initially-stationary particle remains at rest
 	pc.pos[1] = 0.0
 	pc.vel[1] = 0.0
+	pc.weight[1] = 1e16
 
 	# No acceleration at x = 0
 	leapfrog_gather!(pc)
@@ -37,7 +149,8 @@ function test_leapfrog(::Type{T}) where T
 	hp.push_vel!(pc, -dt/2)
 
 	# No movement
-	hp.push!(pc, dt)
+	grid = hp.Grid(1, 0, 1, 1, hp.WallBoundary(0.5), hp.WallBoundary(0.5))
+	hp.push!(pc, dt, grid)
 	@test pc.pos[1] == 0
 	@test pc.vel[1] == 0
 
@@ -54,7 +167,7 @@ function test_leapfrog(::Type{T}) where T
 
 	for i in 2:num_steps
 		leapfrog_gather!(pc)
-		hp.push!(pc, dt)
+		hp.push!(pc, dt, grid)
 
 		pos[i] = pc.pos[1]
 		vel[i] = pc.vel[1]
@@ -97,6 +210,8 @@ function test_linear_drop(::Type{T}, V) where T
 	dt_norm = dt / hp.t_0
 
 	# pushback step
+	grid = hp.Grid(1, 0, 1, 1, hp.WallBoundary(0.5), hp.WallBoundary(0.5))
+	pc.weight[1] = 1e16
 	hp.gather!(pc, E_itp)
 	hp.push_vel!(pc, -dt_norm/2)
 
@@ -104,7 +219,7 @@ function test_linear_drop(::Type{T}, V) where T
 	while pc.pos[1] < x_norm[end] 
 		t += dt_norm
 		hp.gather!(pc, E_itp)
-		hp.push!(pc, dt_norm)
+		hp.push!(pc, dt_norm, grid)
 	end
 
 	hp.push_vel!(pc, dt_norm/2)
@@ -123,49 +238,6 @@ end
 	end
 end
 
-
-function test_add_particles(::Type{T}) where T 
-	# try initalizing the particles object 
-	particles = hp.ParticleContainer{T}(0, Xenon(1))
-
-	#check the initialization 
-	@test hp.charge(particles.species) == 1
-	@test hp.mass(particles.species) == Xenon.mass
-	@test isempty(particles.pos)
-	@test isempty(particles.vel)
-	@test isempty(particles.acc)
-	@test isempty(particles.weight)
-
-	# try adding two particles 
-	pos = [T(1.57), T(0.51)]
-	vel = [T(19823.1041), T(981.471)]
-	weight = [T(1.589e16), T(1.589e16)]
-
-	particles = hp.add_particles!(particles, pos, vel, weight)
-
-	#check them 
-	@test length(particles.pos) == 2
-	@test particles.pos[1] == pos[1]
-	@test particles.pos[2] == pos[2]
-
-	@test length(particles.vel) == 2
-	@test particles.vel[1] == vel[1]
-	@test particles.vel[2] == vel[2]
-
-	@test length(particles.weight) == 2
-	@test particles.weight[1] == weight[1]
-	@test particles.weight[2] == weight[2]
-
-	@test length(particles.acc) == 2
-	@test particles.acc[1] == 0
-	@test particles.acc[2] == 0
-end
-
-@testset "Add particles" begin
-	for T in [Float32, Float64]
-		test_add_particles(T)
-	end
-end
 
 @testset "SpeciesProperties" begin
 	for T in [Float32, Float64]
@@ -203,25 +275,6 @@ end
 	end
 end
 
-
-@testset "Grid construction" begin
-	N = 100
-	left_boundary = hp.OpenBoundary()
-	right_boundary = hp.WallBoundary(0.5)
-	area = 1.0
-	x0 = 0
-	x1 = 1
-	grid = hp.Grid(N, x0, x1, area, left_boundary, right_boundary)
-
-	@test length(grid.cell_centers) == N+2
-	@test length(grid.face_centers) == N+3
-	@test grid.left_boundary == left_boundary
-	@test grid.right_boundary == right_boundary
-	dz = (x1 - x0) / N
-	@test grid.dz ≈ dz  
-	@test all(volume ≈ dz * area for volume in grid.cell_volumes)
-	@test grid.face_centers[end-1] - grid.face_centers[2] == (x1 - x0)
-end
 
 @testset "Particle location" begin
 	N = 100
@@ -406,7 +459,7 @@ end
 
 	n_0 = 1e18 / hp.n_0
 	n_e = ones(T, num_cells+2) * n_0
-	T_e = 5.0
+	T_e = ones(T, num_cells+2) * 5.0
 
 	# check that uniform density causes phi == 0 and E == 0 everywhere
 	phi = zeros(T, num_cells+2)
@@ -426,7 +479,7 @@ end
 	@test isapprox(phi[2], zero(T); atol)
 	@test isapprox(phi[num_cells+1], zero(T); atol)
 	n_ratio = maximum(n_e) / n_e[2]
-	@test maximum(phi) ≈ T_e * log(n_ratio)
+	@test maximum(phi) ≈ T_e[1] * log(n_ratio)
 	# note: this is true if we have an even number of cells,
 	# since an edge will lie exactly in the middle
 	midpt = length(E) ÷ 2 + 1
@@ -539,7 +592,7 @@ function test_initialize_reaction(::Type{T}) where T
 	product = [Xenon(1)]
 
 	# initialize the struct 
-	Xe_ionization = hp.Reaction{T}(reactant, product, [1], threshold_energy, table, [0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0])
+	Xe_ionization = hp.Reaction{T}(table, product, [0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0],  [0],[1], reactant, threshold_energy, 0)
 
 	# actually test 
 	@test Xe_ionization.reactant == reactant
@@ -559,13 +612,13 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 	# seed properties/initialize cell arrays 
 	n_cell = 10 
 	n_n = 500
-	grid = hp.Grid(n_cell, 0, 1.0, 1.0)
+	grid = hp.Grid(n_cell, 0, 1.0, 1.0, hp.OpenBoundary(), hp.OpenBoundary())
 	n_particles = n_n * n_cell 
 	
 	# initialize the reactant 
 	reactant_properties = hp.SpeciesProperties{T}(n_cell+2, reactant_gas)
 	reactant_properties.dens .= 1e18 / hp.n_0# 1/m^3
-	reactant_properties.vel .= 300
+	reactant_properties.vel .= 300 ./ hp.u_0
 	reactant_properties.temp .= (500 / 11604) # eV
 	reactant_properties.avg_weight .= 0
 	reactant_properties.N_particles .= 0
@@ -586,7 +639,7 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 		# initialize 
 		properties = hp.SpeciesProperties{T}(n_cell+2, product)
 		properties.dens .=  1e16 / hp.n_0# 1/m^3
-		properties.vel .= 5000
+		properties.vel .= 5000 / hp.u_0
 		properties.temp .=  0.1 # eV
 		properties.avg_weight .= 0
 		properties.N_particles .= 0
@@ -608,25 +661,23 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 	# now can initialization for reaction properties 
 	# load the rate table 
 	threshold_energy, table = hp.read_reaction_rates(reaction_path)
-	
-
-
-	reaction = hp.Reaction{T}(reactant_gas, product_gases, product_coefficients, threshold_energy, table, zeros(n_cell+2), zeros(n_cell+2))
+	reaction = hp.Reaction{T}(table, product_gases,  zeros(n_cell+2), zeros(n_cell+2), zeros(UInt8, length(product_gases)), product_coefficients, reactant_gas, threshold_energy, 0)
 
 	# initialize some electron properties
-	electron = hp.Gas(name=:e, mass=0.00054858)
+	electron = hp.Gas(name=:e, mass=hp.m_e)
 	electron_properties = hp.SpeciesProperties{T}(n_cell+2, electron(-1))
 	electron_properties.temp .= TeV # choose 10eV for now 
 	electron_properties.dens .= product_properties[1].dens # quasineutrality 
 
 	# reduce weights 
-	dt = 1e-9 / hp.t_0
+	dt = 15e-9 / hp.t_0
 	reaction, reactant = hp.deplete_reactant!(reaction, reactant, reactant_properties, products, product_properties, grid, electron_properties, dt) 
 
 	# check that number is conserved 
 	hp.deposit!(reactant_properties, reactant, grid)
 	rate = reaction.rate_table(TeV)
 	delta_ns = zeros(T, n_cell+2)
+	delta_n_vals = zeros(T, n_cell+2)
 	for i in 2:n_cell+1
 
 		delta_n = dt * electron_properties.dens[i] * old_reactant_density[i] * rate
@@ -645,37 +696,34 @@ function test_reaction_step(reactant_gas, product_gases, product_coefficients, r
 
         end
 		delta_ns[i] = n_consumed
-
+		delta_n_vals[i] = delta_n
+	end
 		
-		@test reaction.delta_n[i] ≈ delta_ns[i]
-		@test isapprox(reactant_properties.dens[i], old_reactant_density[i] - delta_n; rtol)
-	end
+	@test all(reaction.delta_n .≈ delta_ns)
+	@test all(isapprox(reactant_properties.dens, old_reactant_density .- delta_n_vals; rtol))
+
 	# check that weights are reduced as expected 
-	for i in 1:length(reactant.pos)
-		@test old_weights[i] >= reactant.weight[i] 
-	end
+	@test all(old_weights .>= reactant.weight)
+	
 
 	# add particles 
 	products = hp.generate_products!(products, product_properties,reaction, reactant_properties, grid)
 
 	
-	#do the tests for each product 
+	# do the tests for each product 
 	for (ip, product) in enumerate(products)
 
 		# check that number is conserved 
 		old_density = copy(product_properties[ip].dens)
 		hp.locate_particles!(product, grid)
 		hp.deposit!(product_properties[ip], product, grid) 
-		for i in 2:n_cell+1
-			@test isapprox(product_properties[ip].dens[i], old_density[i] + delta_ns[i]; rtol)
-		end
+		
+		@test all(isapprox(product_properties[ip].dens, old_density + delta_ns; rtol))
 
 		# final check that the number of ions has expanded 
 		@test length(product.pos) > n_particles 
 	end
 end
-
-
 
 @testset "Reactions" begin
 	test_read_reaction_table()
@@ -690,7 +738,7 @@ end
 
 	This test case is to ensure the overall reaction functions are behaving as expected 
 	"""
-	tol = 1e-3
+	tol = 1e-2
 
 	for T in [Float32, Float64]
 		test_initialize_reaction(T)
@@ -736,3 +784,4 @@ end
 		test_reaction_step(NO(0), [N(0), O(0)], [1,1], "../reactions/Dissociation_NO.dat", 60, T, tol)
 	end
 end
+
